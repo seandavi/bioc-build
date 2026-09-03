@@ -1,121 +1,420 @@
-name: build
-
-# Reusable build+check+attest+stage workflow (SPEC-014 §build.yml). The
-# workflow_call and workflow_dispatch triggers share one job so dispatch.yml
-# can `uses:` this file and a human can also run it directly.
+# Verbatim copy of r-universe-org/workflows/.github/workflows/build.yml
+# Upstream: https://github.com/r-universe-org/workflows
+# Pinned at commit 2025515d8de93f38f70bb8ff6384e06821a3b5bd (2026-09-03).
+# Every `uses:` below is pinned to the full sha that ref resolved to at the
+# same time (r-universe-org/actions and r-universe-org/build-source pin
+# their own moving branches/tags the same way upstream's build.yml points
+# at them, just frozen). Diff against upstream with scripts/upstream-diff.sh --
+# it must come back empty for this commit. Our config layer and divergences
+# land in later commits; see README.md for what those are and why.
 on:
   workflow_call:
     inputs:
+      universe:
+        description: Universe to take dependencies from
+        type: string
+      repository:
+        description: URL to git repository containing R package
+        type: string
+        default: https://github.com/${{ github.repository }}
+      ref:
+        description: Commit-id or refname to build
+        type: string
+        default: ${{ github.sha }}
+      subdir:
+        description: Directory to find R package
+        type: string
+      nobinaries:
+        description: Skip build and check on Windows and MacOS
+        type: string
+      organization:
+        description: Run extra organization specific checks
+        type: string
+        default: ${{ github.repository_owner }}
+      variables:
+        description: Extra environment variables from R-universe
+        type: string
+        default: '{}'
+      timeout:
+        description: Max build time in minutes
+        type: number
+        default: 60
+    outputs:
+      commitinfo:
+        description: "Metadata from the commit"
+        value: ${{ jobs.source.outputs.commitinfo }}
+      maintainerinfo:
+        description: "Metadata from the maintainer"
+        value: ${{ jobs.source.outputs.maintainerinfo }}
       package:
-        required: true
-        type: string
-      stream:
-        required: true
-        type: string
-      manifest_ref:
-        required: false
-        type: string
-        default: main
-  workflow_dispatch:
-    inputs:
-      package:
-        required: true
-        type: string
-      stream:
-        required: true
-        type: string
-      manifest_ref:
-        required: false
-        type: string
-        default: main
+        description: "Name of the package if build was tried"
+        value: ${{ jobs.source.outputs.package }}
+      version:
+        description: "Version of the package"
+        value: ${{ jobs.source.outputs.version }}
+      biocchecks:
+        description: "Check results from Bioconductor"
+        value: ${{ jobs.bioconductor.outputs.checkresults }}
 
-# CLAUDE.md: exactly these three, nothing else, no secrets. Public repo.
-permissions:
-  id-token: write
-  contents: read
-  attestations: write
+env:
+  UNIVERSE_NAME: ${{ inputs.universe }}
+  MY_UNIVERSE: ${{ inputs.universe && format('https://{0}.r-universe.dev', inputs.universe) || '' }}
+  CRAN_VERSION: ${{ fromJSON(inputs.variables).CRAN_VERSION }}
+  NO_ADDITIONAL_REPOSITORIES: ${{ inputs.organization == 'cran' || inputs.organization == 'bioconductor' || '' }}
 
 jobs:
-  # `container:` on the build job needs its image known before that job
-  # starts, and can't run shell itself -- so resolve it here first.
-  resolve:
+  source:
+    name: Source pkg and vignettes
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env: ${{fromJSON(inputs.variables)}}
     outputs:
-      branch: ${{ steps.v.outputs.branch }}
-      tag: ${{ steps.v.outputs.tag }}
-      universe: ${{ steps.v.outputs.universe }}
-      container: ${{ steps.v.outputs.container }}
-    steps:
-      - id: v
-        run: |
-          set -euo pipefail
-          versions=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/${{ inputs.manifest_ref }}/versions.yaml")
-          release=$(echo "$versions" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "${{ inputs.stream }}" = "release" ]; then
-            branch="RELEASE_$(echo "$release" | tr . _)"; tag="$branch"; universe="bioc-release"
-          elif [ "${{ inputs.stream }}" = "devel" ]; then
-            branch="devel"; tag="devel"; universe="bioc"
-          else
-            echo "unknown stream '${{ inputs.stream }}'" >&2; exit 1
-          fi
-          # anonymous Docker Hub registry API for the image digest; falls
-          # back to the tag (ponytail: no retries) if this breaks.
-          token=$(curl -fsSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository:bioconductor/bioconductor_docker:pull" | grep -o '"token":"[^"]*"' | cut -d'"' -f4) || true
-          digest=$(curl -fsSL -I -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" "https://registry-1.docker.io/v2/bioconductor/bioconductor_docker/manifests/$tag" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}') || true
-          container="bioconductor/bioconductor_docker:$tag"
-          [ -n "$digest" ] && container="bioconductor/bioconductor_docker@$digest"
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "universe=$universe" >> "$GITHUB_OUTPUT"
-          echo "container=$container" >> "$GITHUB_OUTPUT"
+      commitinfo: ${{ steps.build.outputs.COMMITINFO }}
+      maintainerinfo: ${{ steps.build.outputs.MAINTAINERINFO }}
+      sourcepkg: ${{ steps.build.outputs.SOURCEPKG }}
+      package: ${{ steps.build.outputs.PACKAGE }}
+      version: ${{ steps.build.outputs.VERSION }}
+      java: ${{ steps.build.outputs.NEED_RJAVA }}
+      jags: ${{ steps.build.outputs.NEED_JAGS }}
+      cmdstan: ${{ steps.build.outputs.NEED_CMDSTAN }}
+      fortran: ${{ steps.build.outputs.NEED_FORTRAN }}
+      golang: ${{ steps.build.outputs.NEED_GOLANG }}
+      cargo: ${{ steps.build.outputs.NEED_CARGO }}
+      quarto: ${{ steps.build.outputs.NEED_QUARTO }}
+      ostype: ${{ steps.build.outputs.OSTYPE }}
+      compiled: ${{ steps.build.outputs.NEEDS_COMPILATION }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
 
-  build:
-    needs: resolve
-    runs-on: ubuntu-latest
-    container:
-      image: bioconductor/bioconductor_docker:${{ needs.resolve.outputs.tag }}
-    # ponytail: static, not policy.max_wall_minutes (a reusable/called workflow
-    # can't take a dynamic value into timeout-minutes); 340 matches the
-    # policy default. Revisit if a profile ever needs a longer budget.
-    timeout-minutes: 340
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # scripts/build.sh is steps 1-6 (resolve/fetch/deps/build/check/size);
-      # it writes staged.json + events.ndjson + logs/ and the disk envelope
-      # monitor (issue #10) lives inside it so selftest.yml gets it for free.
-      # ubuntu-latest has plenty of free disk (~105G), so no free-disk-space
-      # step or separate /mnt work dir -- the checkout dir is fine.
-      - name: build (resolve, fetch, deps, build, check, size)
-        run: bash scripts/build.sh
+      - name: Free disk space on runner
+        run: rm -Rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" || true
+      - id: build
+        timeout-minutes: ${{ inputs.timeout }}
+        name: Build source package and vignettes
+        uses: r-universe-org/build-source@1ee4788f93b7a9f2da882e757ceeff34759a7ab5 # master
         env:
-          PACKAGE: ${{ inputs.package }}
-          STREAM: ${{ inputs.stream }}
-          BRANCH: ${{ needs.resolve.outputs.branch }}
-          UNIVERSE: ${{ needs.resolve.outputs.universe }}
-          MANIFEST_REF: ${{ inputs.manifest_ref }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          CONTAINER: ${{ needs.resolve.outputs.container }}
-
-      - name: attest tarball provenance
-        if: success() && github.ref == 'refs/heads/main'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
         with:
-          subject-path: ./*.tar.gz
-
-      # if: always() — a failed build still stages staged.json + logs +
-      # events so the dispatcher/publisher learn the attempt happened.
-      - name: upload staged artifact
+          url: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          subdir: ${{ inputs.subdir }}
+          branch: ${{ fromJSON(inputs.variables).branch }}
+          articles: ${{ fromJSON(inputs.variables).registered }}
+      - name: "Store source package"
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE }}
+        id: artifact
+        with:
+          name: package-source
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.build.outputs.DISTRO }}
+          FILE: ${{ steps.build.outputs.SOURCEPKG }}
+          TARGET: ${{ steps.build.outputs.SOURCEPKG && 'source' || 'failure' }}
+      - name: "Store linux binary package"
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ !cancelled() && steps.build.outputs.BINARYPKG && github.run_attempt == 1 }}
+        with:
+          name: package-linux-release-x86_64
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.build.outputs.DISTRO }}
+          FILE: ${{ steps.build.outputs.BINARYPKG }}
+          TARGET: 'linux'
+      - id: matrix
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: r-universe-org/actions/build-matrix@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
         with:
-          name: staged-${{ inputs.package }}-${{ inputs.stream }}
-          path: |
-            ./*.tar.gz
-            staged.json
-            events.ndjson
-            logs/**
-          retention-days: 14
-          if-no-files-found: warn
+          compiled: ${{ steps.build.outputs.NEEDS_COMPILATION }}
+          universe: ${{ inputs.universe }}
+      - name: "${{'Conclude'}}: source: ${{ steps.build.outputs.RVERSION }}: ${{ steps.build.outcome == 'success' && 'OK' || 'ERROR' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        if: always()
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+
+  linux:
+    needs: [source]
+    if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
+    runs-on: ubuntu-24.04${{matrix.arch=='arm64' && '-arm' || ''}}
+    timeout-minutes: 150
+    name: R-${{ matrix.r }} for Linux ${{ needs.source.outputs.compiled && matrix.arch || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).linux}}
+    container:
+      image: ghcr.io/r-universe-org/base-image:${{ matrix.r }}
+      volumes:
+        - /usr:/host/usr
+    steps:
+      - name: "Prepare Linux system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/linux-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "R CMD check"
+        uses: r-universe-org/actions/linux-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store binaries"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.check.outputs.binarypkg }}
+        with:
+          name: package-linux-${{ matrix.r }}-${{ matrix.arch }}
+          overwrite: ${{ matrix.r == 'release' }}
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.check.outputs.distro }}
+          FILE: ${{ steps.check.outputs.binarypkg }}
+          CHECKSTATUS: ${{ steps.check.outputs.checkstatus }}
+          TARGET: 'linux'
+      - name: "${{'Conclude'}}: linux-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  windows:
+    needs: [source]
+    if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
+    runs-on: ${{matrix.arch=='arm64' && 'windows-11-arm' || 'windows-2025'}}
+    timeout-minutes: 150
+    name: R-${{ matrix.r }} for Windows ${{ needs.source.outputs.compiled && matrix.arch || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).windows}}
+    steps:
+      - name: "Prepare Windows system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/windows-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        with:
+          java: ${{ needs.source.outputs.java }}
+          jags: ${{ needs.source.outputs.jags }}
+          quarto: ${{ needs.source.outputs.quarto }}
+          cargo: ${{ needs.source.outputs.cargo }}
+      - name: Install R-${{matrix.r}} for Windows
+        timeout-minutes: 10
+        uses: r-universe-org/actions/setup-r@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: install-r
+        with:
+          r-version: ${{ matrix.r }}
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/windows-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/windows-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+          ostype: ${{ needs.source.outputs.ostype }}
+      - name: "R CMD check"
+        uses: r-universe-org/actions/windows-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store binaries"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.check.outputs.binarypkg }}
+        with:
+          name: package-windows-${{ matrix.r }}-${{ matrix.arch }}
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: windows
+          FILE: ${{ steps.check.outputs.binarypkg }}
+          CHECKSTATUS: ${{ steps.check.outputs.checkstatus }}
+          TARGET: windows
+      - name: "${{'Conclude'}}: windows-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  macos:
+    needs: [source]
+    if: ${{ !cancelled() && !inputs.nobinaries && needs.source.outputs.sourcepkg }}
+    runs-on: macos-${{ matrix.arch == 'x86_64' && '15-intel' || '15' }}
+    timeout-minutes: 150
+    name: R-${{ matrix.r }} for MacOS ${{ needs.source.outputs.compiled && matrix.arch || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).macos}}
+    steps:
+      - name: "Prepare macOS system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/macos-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        with:
+          version: ${{ matrix.r }}
+          fortran: ${{ needs.source.outputs.fortran }}
+          golang: ${{ needs.source.outputs.golang }}
+          jags: ${{ needs.source.outputs.jags }}
+          quarto: ${{ needs.source.outputs.quarto }}
+      - name: Install R-${{matrix.r}} for MacOS
+        timeout-minutes: 10
+        uses: r-universe-org/actions/setup-r@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: install-r
+        with:
+          r-version: ${{ matrix.r }}
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/macos-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/macos-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "R CMD check"
+        uses: r-universe-org/actions/macos-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store binaries"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.check.outputs.binarypkg }}
+        with:
+          name: package-macos-${{ matrix.r }}-${{ matrix.arch }}
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: macos
+          FILE: ${{ steps.check.outputs.binarypkg }}
+          CHECKSTATUS: ${{ steps.check.outputs.checkstatus }}
+          TARGET: macos
+      - name: "${{'Conclude'}}: macos-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  wasm:
+    needs: [source]
+    if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    name: R-${{ matrix.r }} for Wasm
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).wasm}}
+    container:
+      image: ghcr.io/r-universe-org/build-wasm${{ matrix.r == 'oldrel' && ':4.4' || '' }}
+    steps:
+      - name: "Prepare WebAssembly system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - id: build
+        name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/wasm-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+          NEED_CARGO: ${{ needs.source.outputs.cargo }}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store package files"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.build.outputs.binarypkg }}
+        with:
+          name: package-wasm-${{ matrix.r }}
+          JOB_STATUS: ${{ job.status }}
+          FILE: ${{ steps.build.outputs.binarypkg }}
+          TARGET: "wasm"
+      - name: "${{'Conclude'}}: wasm-${{ matrix.r }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.build.outputs.binarypkg && 'OK' || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  bioconductor:
+    needs: [source]
+    if: ${{ !cancelled() && needs.source.outputs.sourcepkg && inputs.organization == 'bioconductor' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    name: Bioconductor Checks
+    container:
+      image: ghcr.io/r-universe-org/base-image:release
+    outputs:
+      checkresults: ${{ steps.check.outputs.checkresults }}
+    steps:
+      - name: "Prepare Linux system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Run BiocCheck for "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/bioc-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Store ${{needs.source.outputs.package}}.BiocCheck
+        id: artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bioc-checks
+          path: ${{needs.source.outputs.package}}.BiocCheck
+      - name: "${{'Conclude'}}: bioc-checks: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  ropensci:
+    name: Build rOpenSci docs
+    runs-on: ubuntu-latest
+    if: ${{ inputs.organization == 'ropensci' }}
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/ropensci-org/rotemplate:latest
+    steps:
+      - name: Build package docs
+        timeout-minutes: 60
+        id: build
+        uses: ropensci-org/rotemplate@4c36a4f9abf949150dc40703d28baee1568dd480 # main
+        with:
+          repo_url: ${{ inputs.repository }}
+          subdir: ${{ inputs.subdir }}
+          r-version: 'skip'
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+      - name: "${{'Conclude'}}: pkgdown: ${{ steps.build.outputs.RVERSION }}: ${{ steps.build.outcome == 'success' && 'OK' || 'ERROR' }}: ${{ steps.build.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.build.outputs.artifact-url}}"
+        if: always()
