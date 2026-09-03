@@ -149,7 +149,11 @@ jobs:
       ref: ${{ needs.resolve.outputs.commit }}
       organization: bioconductor
       nobinaries: "true"
-      timeout: ${{ needs.resolve.outputs.timeout }}
+      # job outputs are always strings; build.yml's timeout input is typed
+      # number, and GH Actions' reusable-workflow-call validation appears to
+      # reject a bare string there silently (no job, no annotation, the
+      # whole run just fails) -- fromJson() coerces it back to a number.
+      timeout: ${{ fromJson(needs.resolve.outputs.timeout) }}
       variables: ${{ needs.resolve.outputs.variables }}
       our_output: "true"
       package_name: ${{ inputs.package }}
