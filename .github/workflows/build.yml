@@ -129,9 +129,14 @@ jobs:
           subdir: ${{ inputs.subdir }}
           branch: ${{ fromJSON(inputs.variables).branch }}
           articles: ${{ fromJSON(inputs.variables).registered }}
+      # NOT gated by our_output: this uploads the package-source artifact
+      # that linux-prep/windows-prep/macos-prep download in every downstream
+      # job (via actions/download-artifact) -- load-bearing plumbing, not a
+      # "final output" to replace. Only the *later* stores (linux binary,
+      # final check binaries) are ours to gate off.
       - name: "Store source package"
         uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
-        if: ${{ !cancelled() && steps.build.outputs.PACKAGE && !inputs.our_output }}
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE }}
         id: artifact
         with:
           name: package-source
@@ -210,9 +215,12 @@ jobs:
       # the repos override below) and point BioCsoft at bioc-registry
       # instead of bioconductor.posit.co (base-image's own Rprofile.site
       # default). See scripts/bioc-registry-repos.R for why BioCann/BioCexp
-      # are left alone.
+      # are left alone. clean: false -- checkout's default `git clean -ffdx`
+      # would delete the source tarball linux-prep just downloaded above.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: inputs.our_output
+        with:
+          clean: false
       - if: inputs.our_output
         run: echo "R_PROFILE_USER=$GITHUB_WORKSPACE/scripts/bioc-registry-repos.R" >> "$GITHUB_ENV"
       - name: "Get dependences"
