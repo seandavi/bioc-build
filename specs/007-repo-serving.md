@@ -32,7 +32,7 @@ controlled DNS — that control IS the anti-lockin mechanism).
 
 ```
 repo/<bioc_version>/<component>/src/contrib/
-  PACKAGES            PACKAGES.gz          PACKAGES.rds
+  PACKAGES            PACKAGES.gz
   <pkg>_<ver>.tar.gz  → served via same tree (see object strategy)
 repo/<bioc_version>/<component>/src/contrib/Archive/<pkg>/   # yanked/superseded, optional (OQ-1.2)
 repo/<bioc_version>/<component>/meta/
@@ -63,11 +63,12 @@ software scale (phase 2) where binary × platform × stream multiplies copies.
 
 ## Index generation (module contract; runs inside SPEC-006)
 
-`generate_indexes(snapshot) -> {PACKAGES, PACKAGES.gz, PACKAGES.rds, tree_ops[]}`
+`generate_indexes(snapshot) -> {PACKAGES, PACKAGES.gz, tree_ops[]}`
 - Deterministic: same snapshot → byte-identical PACKAGES and PACKAGES.gz.
-  (PACKAGES.rds: R serialization determinism must be validated — OQ-7.1;
-  if not achievable, exclude .rds from determinism criterion and generate
-  via pinned R container step.)
+- Does not ship `PACKAGES.rds` (issue #4 cut, closes OQ-7.1: R serialization
+  determinism across versions was never validated, and it wasn't needed —
+  `install.packages`/`BiocManager` fall back to `PACKAGES.gz` when
+  `PACKAGES.rds` is absent).
 - Fields written per package: standard CRAN fields from `description` block;
   `MD5sum` omitted; add nonstandard `SHA256sum:` field (harmless to R
   clients, machine-verifiable installs for those who care).
@@ -81,9 +82,10 @@ software scale (phase 2) where binary × platform × stream multiplies copies.
 - CDN TTLs: indexes 5 min; tarballs immutable (cache-forever; filenames are
   version-unique and content never changes for a given name+version —
   enforced by publisher: re-publishing same name+version with different
-  sha256 is rejected on release channels, requires supersede on devel with
-  a version bump. **Normative: a tarball URL, once served, never changes
-  bytes.**)
+  sha256 is rejected on release channels; on devel it is just a new
+  `publish` record — latest-wins fold semantics apply, no dedicated
+  supersede mechanism (cut, SPEC-001 issue #4). **Normative: a tarball
+  URL, once served, never changes bytes.**)
 - Frozen releases: after `freeze`, tree becomes effectively immutable;
   exception publishes follow the same pipeline.
 
@@ -107,8 +109,8 @@ plus binary contrib paths. Layout reserved now:
 
 ## Open questions
 
-- OQ-7.1: PACKAGES.rds byte-determinism across R versions (serialization
-  headers). Investigate; fallback per above.
+- ~~OQ-7.1: PACKAGES.rds byte-determinism across R versions.~~ Moot (issue
+  #4): the file isn't shipped.
 - OQ-7.2: Domain + CDN: Cloudflare in front of R2 same-account is default;
   confirm Bioconductor DNS governance for the chosen hostname.
 - EXT-7.1: BiocManager upstream change to emit new URLs — file early; PoC

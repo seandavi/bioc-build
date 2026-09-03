@@ -61,10 +61,11 @@ Artifact sha256 refers to a blob mirrored into the content-addressed store.
 **yank** — removes `package {name, version}` from the fold. Blob retained.
 Fields: `reason` (free text), `reference` (URL: issue/PR/advisory).
 
-**supersede** — devel-channel only. Marks `package {name, old_version}` as
-replaced by `new_version` (which must have its own publish record). Exists to
-distinguish replacement from coexisting versions in audit queries; fold
-effect identical to the new publish under latest-wins.
+~~**supersede**~~ — cut (issue #4): its fold effect was already identical to
+the new `publish` under devel's latest-wins rule, so it recorded nothing a
+`publish` record doesn't already carry. Audit queries that want "what
+replaced what" on devel read consecutive `publish` records for a name, not
+a dedicated record type.
 
 **freeze** — pins a release. Fields: `snapshot_sha256`, `as_of_seq`,
 `label` (e.g. "3.23 branch point"). After a freeze on a `release` channel,
@@ -84,33 +85,40 @@ Fold(stream, up_to_seq) → map of package name → publish record:
    Channel `devel` → latest-wins by seq (not by version comparison).
 3. `yank`: remove (name) if current entry's version matches; else no-op with
    verifier warning.
-4. `freeze`, `policy`, `supersede`: no fold effect.
+4. `freeze`, `policy`: no fold effect.
 
 The fold MUST be deterministic: same segments → byte-identical snapshot.
 
 ## Snapshots
 
 - Canonical JSON: JCS-serialized array of folded publish records, sorted by
-  package name. Stored at `snapshots/<sha256-of-itself>.json`.
-- Parquet twin at `snapshots/<sha256>.parquet`, one row per package,
-  `description` fields columnarized. Same sha in filename refers to the JSON
-  canonical form; Parquet carries it as metadata.
+  package name. Stored at `snapshots/<sha256-of-itself>.json`. JSON only for
+  phase 1 (issue #4 cut) — DuckDB reads JSON natively, so a Parquet twin
+  buys nothing until snapshot volume justifies columnar storage; add it in
+  phase 2 if profiling shows JSON scan cost matters.
 - `head/<stream-id>.json`: `{"schema_version":"1","snapshot_sha256":"…",
   "ledger_seq":4217,"updated_at":"…"}`. The ONLY mutable object. Rollback =
   rewrite HEAD to a prior snapshot; reproduce any state = fold to seq.
 
 ## Validation tooling (deliverables of this spec)
 
-- LinkML model → generated JSON Schema + Python/TS validators.
+- LinkML model → generated JSON Schema + one validator (issue #4 cut: one
+  implementation, not dual Python + TS — the fold is small and pure enough
+  that a second from-scratch implementation buys correctness confidence a
+  verifier gets more cheaply).
 - `ledger-verify` CLI: chain integrity, seq continuity, fold determinism,
-  snapshot recomputation vs HEAD. Target: < 20 s for 100k records.
+  snapshot recomputation vs HEAD — this verifier *is* the cross-check
+  (independently recomputes the fold from segments and diffs against the
+  implementation's snapshot + HEAD, rather than requiring a second
+  from-scratch fold implementation to agree byte-for-byte). Target: < 20 s
+  for 100k records.
 - Fixture generator producing synthetic ledgers for downstream dev
   (consumed by SPEC-004/006/007 test suites).
 
 ## Acceptance criteria
 
-- Two independent fold implementations (Python + the publisher's TS) produce
-  byte-identical snapshots over the fixture corpus.
+- `ledger-verify` recomputes the fold from segments and matches the
+  implementation's snapshot + HEAD byte-for-byte over the fixture corpus.
 - Chain tamper (any byte in any historical record) detected by verifier.
 - Freeze + post-freeze exception flow round-trips in fixtures.
 

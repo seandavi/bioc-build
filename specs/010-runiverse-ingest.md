@@ -45,8 +45,10 @@ only where this spec's ledger framing adds or changes a step:
 3. Emit `artifact_staged{intake: external}` → publisher.
 4. Emit `external_state_observed` events (full universe state hash) for
    drift detection: if r-universe removes/changes a version we've published
-   (their devel latest-wins churn), the diff drives supersede/yank
-   proposals — devel channel auto-applies latest-wins; release channels
+   (their devel latest-wins churn), the diff drives new-publish/yank
+   proposals (the `supersede` record type was cut, SPEC-001 issue #4 —
+   devel's ordinary latest-wins fold already captures replacement) —
+   devel channel auto-applies latest-wins; release channels
    never auto-yank (human review).
 
 ## Publisher intake (extends SPEC-006)

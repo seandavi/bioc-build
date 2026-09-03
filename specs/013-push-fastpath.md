@@ -58,8 +58,8 @@ fast-path outage degrades latency only.
 
 - Single Worker, two auth schemes (bioc-git HMAC, GitHub App HMAC); ~100
   lines + shared event-emission. Emits `upstream_push` into the event plane
-  (SPEC-009) and forwards to the dispatcher fast path (service binding or
-  queue, mirroring the OQ-6.1 decision).
+  (SPEC-009) and forwards to the dispatcher fast path (service binding —
+  SPEC-006 OQ-6.1 closed against Queues for this estate).
 - Idempotence: (package, stream, sha) dedup via short-window KV memo
   (shared convention with SPEC-008 dispatch memo).
 

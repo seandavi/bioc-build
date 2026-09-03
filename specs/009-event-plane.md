@@ -42,6 +42,15 @@ publish_rejected, manifest_updated, build_dispatched, policy (mirror).
 
 ## Ingest
 
+**Phase 1: see SPEC-014.** No separate event-ingest Worker (issue #4 — a
+second auth surface buys nothing phase 1 needs): `events.ndjson` travels
+inside the run's staged GitHub Actions artifact, written directly by
+`build.yml` steps, and `publish.yml` copies it out during promotion. One
+auth surface (the same OIDC-backed artifact upload every staged file uses)
+instead of two.
+
+## Target architecture (phase 2+): ingest
+
 `POST /v1/events` (batch NDJSON body, ≤ 1 MB):
 - Auth per producer class: GitHub OIDC via `gh-oidc-verify` (SPEC-005 lib;
   audience `bioc-build-events`; repo allowlist includes build repo AND
@@ -55,7 +64,7 @@ publish_rejected, manifest_updated, build_dispatched, policy (mirror).
 - Availability contract: producers treat ingest as best-effort (SPEC-004
   rule); ingest itself targets simple 99.9% (it's ~100 lines).
 - Forwarder: `artifact_staged` events additionally enqueued to the
-  publisher queue (OQ-6.1).
+  publisher queue — moot in phase 1 (no queue, SPEC-006 OQ-6.1 closed).
 
 ## Catalog (phase 2; minimal viable in phase 1 for dispatcher queries)
 

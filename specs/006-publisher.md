@@ -27,6 +27,19 @@ a new service.
 
 ## Architecture
 
+**Phase 1: see SPEC-014.** No Worker front, no per-stream Durable Object,
+no Cloudflare Queues. `publish.yml`, a cron in the trusted bioc-registry
+repo, scans `gh run list --workflow build.yml --status completed` for
+`staged-*` artifacts not yet recorded in `attempts.json` (issue #4: staging
+is already the durable record, and the publisher already backfills every
+run, so a push-triggered queue would duplicate work the polling loop does
+anyway). This closes OQ-6.1 in favor of the simpler polling design.
+`publish.yml` reuses bioc-registry's existing digest-keyed, idempotent
+Cloudflare Workflows pattern (bioc-infrastructure ADR 0007) rather than
+introducing Queues.
+
+## Target architecture (phase 2+): architecture
+
 - Stateless Worker front: receives triggers (queue consumer on
   `artifact_staged` events, plus `POST /v1/admin/*` for freeze/yank behind
   Cloudflare Access), routes to the stream's DO.
@@ -41,10 +54,14 @@ a new service.
    `artifact_staged` event's `staged_manifest_sha256`.
 2. Download tarball from staging; recompute sha256 == declared. Extract
    DESCRIPTION; compute dcf_sha256; parse fields.
-3. Verify attestation bundle: sigstore verification; subject digest ==
-   tarball sha256; certificate identity claims: repository ==
-   `seandavi/bioc-build`, workflow == `build.yml`, and `source` claims
-   consistent with staged.json `{git_url, commit}`.
+3. Verify attestation: phase 1 (SPEC-014) runs `gh attestation verify
+   <tarball> --repo seandavi/bioc-build --signer-workflow
+   seandavi/bioc-build/.github/workflows/build.yml` in the scheduled
+   Action — sigstore verification is free there, so it never has to run
+   inside a Worker (closes OQ-6.2: no Workers-runtime sigstore library to
+   validate). Subject digest == tarball sha256; certificate identity
+   claims: repository == `seandavi/bioc-build`, workflow == `build.yml`,
+   and `source` claims consistent with staged.json `{git_url, commit}`.
 4. Manifest checks 1–7 verbatim from SPEC-002 at the publisher's pinned
    manifest commit (recorded in the ledger record).
 5. Policy consistency: staged `policy_version` is current-or-recent
@@ -55,7 +72,7 @@ a new service.
    Same for attestation bundle (stored under its own sha).
 7. Append `publish` record (SPEC-001 schema; seq/prev from DO state).
 8. Fold incrementally (DO holds current fold), write canonical snapshot
-   JSON + Parquet, rewrite HEAD atomically.
+   JSON (Parquet twin cut, issue #4 — JSON only), rewrite HEAD atomically.
 9. Regenerate index files for the stream (delegated to the index writer
    module defined in SPEC-007; runs in-publisher).
 10. Emit `published{package, version, sha256, seq}` event.
@@ -89,8 +106,9 @@ write. Rejections are events, not ledger records.
 ## Acceptance criteria
 
 - Property test: pipeline over fixture corpus (valid + each violation
-  class) produces exactly the SPEC-001 fixtures' expected ledgers; TS fold
-  byte-identical to Python reference (SPEC-001 criterion).
+  class) produces exactly the SPEC-001 fixtures' expected ledgers;
+  `ledger-verify` recomputes and matches (SPEC-001 criterion, issue #4 —
+  one fold implementation plus a verifier, not two implementations).
 - Kill-at-every-step crash test recovers to consistent state with no
   duplicate seq and correct HEAD.
 - End-to-end: real build (SPEC-004) → published; tampered tarball in
@@ -101,10 +119,11 @@ write. Rejections are events, not ledger records.
 
 ## Open questions
 
-- OQ-6.1: Cloudflare Queues vs direct event-plane consumer for triggers.
-  Default: Queues (redelivery semantics) fed by a tiny forwarder from
-  ingest; direct wiring acceptable for PoC.
-- OQ-6.2: Sigstore verification inside a Worker (bundle verification
-  library availability in workers runtime) — validate early; fallback is
-  verification in a scheduled container step, which weakens latency but
-  not the trust model.
+- ~~OQ-6.1: Cloudflare Queues vs direct event-plane consumer.~~ Closed
+  (issue #4): phase 1 uses neither — a cron scanning the staging prefix
+  (SPEC-014). Queues remain a phase-2+ option if push-triggered promotion
+  latency is ever needed.
+- ~~OQ-6.2: Sigstore verification inside a Worker.~~ Closed (issue #4):
+  phase 1 never verifies inside a Worker — `gh attestation verify` runs in
+  the scheduled Action, where it's free (SPEC-014). The Workers-runtime
+  sigstore-library question doesn't need answering for phase 1.

@@ -51,7 +51,6 @@ profiles:
     rebuild:
       on_push: true
       on_dependency_invalidation: false
-      scheduled_refresh: monthly
     envelope: inherit
   workflows:
     build:
@@ -65,7 +64,6 @@ profiles:
     rebuild:
       on_push: true
       on_dependency_invalidation: false        # phase 3 revisits
-      scheduled_refresh: monthly
     envelope:
       max_wall_minutes: 340        # explicit: workflow vignettes are slow
 overrides_schema:                  # what manifest per-package overrides may set
@@ -115,6 +113,7 @@ overrides_schema:                  # what manifest per-package overrides may set
   Default: here, as `r_map: {devel: "R-devel", "3.23": "4.6"}` block.
 - OQ-3.2: Should workflow-package check severity be stricter than BBS
   historical practice? Gather PoC failure data first.
-- OQ-3.3: `scheduled_refresh: monthly` — needed at all for source-only
-  profiles? Only value is re-check against moved dependencies; may drop in
-  favor of phase-3 revdep checks.
+- ~~OQ-3.3: `scheduled_refresh: monthly`.~~ Dropped (issue #4): its only
+  value was re-checking against moved dependencies, and SPEC-011's
+  event-driven revdep checks (phase 3) cover that need directly instead of
+  a blind monthly sweep. No `scheduled_refresh` key in phase 1.
