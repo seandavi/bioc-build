@@ -69,7 +69,10 @@ introducing Queues.
    the version is unseen in this stream's ledger, first append a `policy`
    record.
 6. Copy blob staging → `blobs/sha256/<aa>/<sha>` (skip if exists — dedup).
-   Same for attestation bundle (stored under its own sha).
+   Same for attestation bundle (stored under its own sha) and for the
+   check/build log files (`logs/*.log`), each under its own sha — amended
+   per SPEC-009 (published-build logs live in `blobs/` long-term; staging
+   logs are TTL'd, so this is the only copy that survives).
 7. Append `publish` record (SPEC-001 schema; seq/prev from DO state).
 8. Fold incrementally (DO holds current fold), write canonical snapshot
    JSON (Parquet twin cut, issue #4 — JSON only), rewrite HEAD atomically.
@@ -82,6 +85,10 @@ detail}` event; leave staging intact for the TTL (forensics); no ledger
 write. Rejections are events, not ledger records.
 
 ## Admin operations
+
+At a branch point, `freeze` is invoked on the *outgoing* release stream
+(e.g. `3.22`), not the newly-branched one (`3.23`, which opens rather than
+freezes) — see SPEC-001 "Release lifecycle".
 
 - `freeze(stream, label)`: fold, write snapshot, append `freeze` record.
 - `yank(stream, package, version, reason, reference)`: append, refold,

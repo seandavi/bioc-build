@@ -86,8 +86,11 @@ software scale (phase 2) where binary × platform × stream multiplies copies.
   `publish` record — latest-wins fold semantics apply, no dedicated
   supersede mechanism (cut, SPEC-001 issue #4). **Normative: a tarball
   URL, once served, never changes bytes.**)
-- Frozen releases: after `freeze`, tree becomes effectively immutable;
-  exception publishes follow the same pipeline.
+- Frozen releases: after `freeze` (fired on the outgoing release stream at
+  a branch point, not the newly-opened one — SPEC-001 "Release lifecycle"),
+  that stream's tree becomes effectively immutable; exception publishes
+  follow the same pipeline. The newly-branched release stream's tree is
+  ordinarily writable from the moment it exists.
 
 ## Acceptance criteria
 

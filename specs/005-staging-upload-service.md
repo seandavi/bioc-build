@@ -45,9 +45,12 @@ then require ALL of:
 
 - URLs are S3-style presigned PUTs against the staging bucket, key
   `staging/<run_id>/<name>`, TTL 30 min, content-length-range pinned to
-  declared `size_bytes` ± 0, and `x-amz-content-sha256` pinned to declared
-  sha256 where R2 supports it (else publisher re-verifies — it re-verifies
-  regardless; the pin is defense in depth).
+  declared `size_bytes` ± 0. R2 does not enforce `x-amz-content-sha256` on
+  presigned PUTs the way a naive reading of the S3 API suggests (issue #5
+  — this spec previously implied it as a binding pin); treat any such
+  header as advisory at most. **Normative: the publisher re-verifies the
+  uploaded bytes' sha256 unconditionally** — that check, not the presign
+  header, is what makes the declared hash trustworthy.
 - Per-run budget: configurable, default 20 GB / 50 files. Prevents a
   compromised run from filling the bucket.
 - Worker never proxies bytes; it only signs.

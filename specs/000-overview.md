@@ -144,7 +144,15 @@ permits). Exit:
 `BiocManager` users install software (r-universe-built) and data
 (self-built) from Bioconductor-controlled URLs indistinguishably.
 
-**Phase 3 (intelligence)**: 011, 012. Gated on phase 2 catalog maturity.
+**Phase 3 (intelligence)**: 011, 012. Gated on phase 2 catalog maturity —
+but 011 does not architecturally depend on 010 (SPEC-011 targets
+r-universe-built packages before any backend flip, by design). It is
+placed after 010 here only because it needs phase 2's full event plane
+(009), not because unifying data-package publishing (010, which the size
+audit found is cheap and rarely needed) is more valuable than detecting
+what a software publish breaks (011 — the BBS value nobody else provides).
+A team with phase-2 event-plane capacity to spare should run 011 in
+parallel with, or ahead of, 010 rather than waiting for phase 3.
 
 ## Cross-cutting open questions
 

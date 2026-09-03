@@ -87,8 +87,8 @@ instead of two.
 - Dashboard: zero-backend SPA, DuckDB-WASM over catalog Parquet (public
   read via CDN). Package build history, current stream status, log links
   (logs live in staging short-term; published-build logs copied to
-  `blobs/` by publisher — amend SPEC-006 step 6 to include log blobs). This
-  dashboard is a separate, additional surface — it is not how results
+  `blobs/` by publisher — SPEC-006 step 6 includes log blobs, applied).
+  This dashboard is a separate, additional surface — it is not how results
   reach bioc-website. bioc-website renders landing pages and check-result
   pages from bioc-registry's data plane (`docs/DATAPLANE.md`); a
   bioc-build result becomes visible there only once it lands under that

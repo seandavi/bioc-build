@@ -27,6 +27,17 @@ fit; deviates only where profiles require.
   license-compatible and profile-compatible (pin by sha; document
   divergences in `UPSTREAM.md`).
 
+Reused build **containers**, not only composite actions (issue #5 — the
+container is the bulk of what "reuses r-universe workflow components"
+actually means in practice): phase 1 (SPEC-014) runs the official
+`bioconductor/bioconductor_docker:RELEASE_3_23` (release) and
+`bioconductor/bioconductor_docker:devel` (devel) images directly — these
+are Bioconductor's own containers, not r-universe's — resolving
+`{release_version, devel_version}` from `https://bioconductor.org/config.yaml`
+rather than hardcoding the tag. r-universe's own build containers are not
+reused in phase 1; a phase-2 profile could pin one of theirs if a build
+target needs their toolchain instead.
+
 ## Workflow steps (normative sequence)
 
 1. **Resolve**: check out the manifest at `manifest_commit`; load entry; resolve
@@ -43,8 +54,17 @@ fit; deviates only where profiles require.
    constraint is runner disk, not source size — tracked as bioc-build
    issue #11 (envelope/disk decision: self-hosted runner? build-from-tarball
    only? skip install-check for pure data?), not solved by this spec.
-3. **Dependency setup**: install deps from the *current unified repo*
-   (SPEC-007 URL) + CRAN. Record resolved dependency versions as
+3. **Dependency setup**: install deps. **Phase 1 (normative, issue #5 —
+   the unified repo this step named doesn't exist until phase 2, SPEC-007
+   OQ-4.2 was unresolved): Linux binaries from the container's built-in
+   binary repos** — `BiocManager::install()` inside
+   `bioconductor/bioconductor_docker` resolves against Bioconductor's own
+   binary repo plus CRAN, both already configured in the image; no
+   `bioc.r-universe.dev` fallback needed for phase-1's package set.
+   Workflow packages carry heavy dependency trees, and source installs are
+   where the 340-minute budget goes, so binary resolution here is load-
+   bearing, not an optimization. The phase-2 target below (unified repo)
+   applies once that repo exists. Record resolved dependency versions as
    `deps_resolved` event (feeds phase-3 differential diagnosis).
 4. **Build**: `R CMD build` per profile (vignettes per profile). Produces
    tarball; compute sha256. Emit `tarball_built{sha256, size_bytes}`.
@@ -103,9 +123,9 @@ phase-3 agents; treat its interface as stable API.
 - OQ-4.1: Vendored vs referenced r-universe actions — vendoring isolates
   from upstream churn but forfeits fixes. Default: reference pinned shas +
   quarterly review.
-- OQ-4.2: Dependency installation source order (unified repo before CRAN?)
-  and Bioc devel deps during PoC (before software is in unified repo, use
-  bioc.r-universe.dev? existing Bioc repos?). PoC default: existing
-  Bioconductor CRAN-style repos for software deps.
+- ~~OQ-4.2: Dependency installation source for phase 1.~~ Resolved (issue
+  #5): the container's built-in binary repos (Bioconductor + CRAN) —
+  see step 3 above. Reopens as source-order question (unified repo vs
+  CRAN) once the unified repo exists in phase 2.
 - OQ-4.3: `--run-donttest` for workflows profile may be too aggressive;
   validate against current BBS behavior.

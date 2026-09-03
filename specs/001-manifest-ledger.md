@@ -67,22 +67,55 @@ the new `publish` under devel's latest-wins rule, so it recorded nothing a
 replaced what" on devel read consecutive `publish` records for a name, not
 a dedicated record type.
 
-**freeze** — pins a release. Fields: `snapshot_sha256`, `as_of_seq`,
-`label` (e.g. "3.23 branch point"). After a freeze on a `release` channel,
-subsequent publishes require `exception {approved_by, reference}`.
+**freeze** — pins a release stream. Fields: `snapshot_sha256`, `as_of_seq`,
+`label`. After a freeze, subsequent publishes to that stream require
+`exception {approved_by, reference}`. See "Release lifecycle" below for
+*which* stream a freeze record applies to and when it fires — it is not
+the stream being branched.
 
 **policy** — records that policy_version changed for this stream. Fields:
 `policy_version`, `policy_sha256` (of the policy file at that version),
 `reference` (PR URL). Self-describes what rules were in force per seq range.
+
+### Release lifecycle (normative)
+
+Bioconductor's lifecycle has four states, not the two ("release" vs
+"devel") the record types above might suggest — issue #5, this spec's
+earlier `label` example ("3.23 branch point" on the freeze it pins) named
+the wrong event as the freeze:
+
+1. **devel** — `bioc_version: "devel"`. Always open, latest-wins fold,
+   never freezes.
+2. **branch** — the branch-point event, roughly twice a year. Devel's
+   current content becomes the seed of a new release stream (e.g. `3.23`);
+   devel itself is unaffected and keeps moving toward the *next*
+   `bioc_version`.
+3. **open release** — the just-branched stream (`3.23`, immediately after
+   branching). It *opens*, not freezes, for roughly six months of ordinary
+   patch-level `publish` records (patch-level is a Bioconductor/manifest
+   convention, not enforced by the ledger).
+4. **frozen old release** — the *previous* release stream (`3.22`) is what
+   actually freezes, at the same branch-point event that opens `3.23`. A
+   `freeze` record is appended to *its* ledger (`3.22`'s), not `3.23`'s.
+   `label` should describe that: e.g. `"frozen at the 3.23 branch point"`,
+   not `"3.23 branch point"` — the label names what happened to *this*
+   stream, not the sibling event that triggered it.
+
+SPEC-006's `freeze(stream, label)` admin op and SPEC-007's "frozen
+releases" serving semantics both freeze the outgoing release stream at a
+branch point, per this lifecycle — see those specs for the write and
+serving mechanics.
 
 ### Fold semantics
 
 Fold(stream, up_to_seq) → map of package name → publish record:
 
 1. Process records in seq order, ≤ up_to_seq.
-2. `publish`/`external_publish`: channel `release` → insert; replacing an
-   existing (name) entry is permitted only pre-freeze or with `exception`.
-   Channel `devel` → latest-wins by seq (not by version comparison).
+2. `publish`/`external_publish`: a release-type stream (`bioc_version` a
+   release number, e.g. `"3.23"`) → insert; replacing an existing (name)
+   entry is permitted only pre-freeze or with `exception`. The `devel`
+   stream (`bioc_version == "devel"`) → latest-wins by seq (not by version
+   comparison).
 3. `yank`: remove (name) if current entry's version matches; else no-op with
    verifier warning.
 4. `freeze`, `policy`: no fold effect.
