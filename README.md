@@ -15,8 +15,9 @@ map of components and the decisions behind them live in
 ## Status
 
 Phase 1 (see [`specs/014-phase1-realization.md`](specs/014-phase1-realization.md)).
-`build.yml`, `selftest.yml` and `dispatch.yml` are live. The component specs
-are in [`specs/`](specs/), starting with [`000-overview.md`](specs/000-overview.md).
+`build.yml` (the r-universe engine), `build-package.yml` (our resolve +
+call entry point) and `dispatch.yml` are live. The component specs are in
+[`specs/`](specs/), starting with [`000-overview.md`](specs/000-overview.md).
 
 ## Relationship to r-universe
 
@@ -35,46 +36,28 @@ instead of r-universe's store-package/deploy. Run
 `scripts/upstream-diff.sh` to see exactly how far `build.yml` has drifted
 from upstream at any point.
 
-## Reproducing a build locally (`selftest.yml`)
+## Reproducing a build locally
 
-`selftest.yml` runs the same resolve/fetch/deps/build/check/size pipeline as
-`build.yml` (they are literally the same script, `scripts/build.sh`), minus
-the attestation and staged-artifact upload. Call it from any fork:
+There's no bespoke script to run by hand any more -- the actual build/check
+steps are r-universe's own `linux-*` actions, running inside
+`ghcr.io/r-universe-org/base-image`. Two ways to reproduce a run:
 
-```yaml
-jobs:
-  selftest:
-    uses: seandavi/bioc-build/.github/workflows/selftest.yml@main
-    with:
-      package: msdata
-      stream: devel   # release | devel, default devel
-```
-
-Or run `workflow_dispatch` on it directly from the Actions tab.
-
-The exact same script is runnable on a laptop with Docker, to reproduce a
-failure bit-for-bit before pushing a fix upstream:
-
-```bash
-git clone https://github.com/seandavi/bioc-build && cd bioc-build
-mkdir -p work/scripts work/logs
-cp scripts/*.R scripts/build.sh work/scripts/
-docker run --rm -v "$PWD/work:/work" -w /work \
-  -e PACKAGE=msdata -e STREAM=release -e BRANCH=RELEASE_3_23 -e UNIVERSE=bioc-release \
-  -e MANIFEST_REF=main -e RUN_ID=local -e RUN_ATTEMPT=1 -e RUN_URL=local \
-  -e CONTAINER=bioconductor/bioconductor_docker:RELEASE_3_23 \
-  bioconductor/bioconductor_docker:RELEASE_3_23 bash /work/scripts/build.sh
-```
-
-`STREAM=release` needs `BRANCH=RELEASE_3_23` and `UNIVERSE=bioc-release` (the
-current release version, from `versions.yaml` at the root of
-[seandavi/bioc-manifest](https://github.com/seandavi/bioc-manifest));
-`STREAM=devel` needs `BRANCH=devel` and `UNIVERSE=bioc` with the
-same-tagged container. Output lands in `work/`: `staged.json`,
-`events.ndjson`, `logs/`, and the tarball on success. In CI, build.yml and
-selftest.yml run this same script directly inside the container via GitHub
-Actions' `container:` job key rather than `docker run` — only the local/manual
-invocation needs the wrapper.
+- **One package, by hand**: run `build-package.yml`'s `workflow_dispatch`
+  from the Actions tab with a `package` and `stream`, or call it from
+  another workflow:
+  ```yaml
+  jobs:
+    build:
+      uses: seandavi/bioc-build/.github/workflows/build-package.yml@main
+      with:
+        package: msdata
+        stream: devel   # release | devel
+  ```
+- **Reproduce r-universe's own steps locally**: since `build.yml` is a
+  sha-pinned copy of r-universe's reusable workflow (see below), running it
+  under [`act`](https://github.com/nektos/act) reproduces the same
+  `build-source`/`linux-deps`/`linux-build`/`linux-check` steps a real run
+  uses, against `ghcr.io/r-universe-org/base-image` directly.
 
 ## Trust model
 

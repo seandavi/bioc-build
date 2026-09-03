@@ -1,0 +1,153 @@
+name: build-package
+
+# Our entry point: resolves package+stream against seandavi/bioc-manifest
+# into r-universe's input shape (universe/repository/ref/...), then calls
+# the mostly-verbatim build.yml engine with our_output set. See README.md
+# "Relationship to r-universe". dispatch.yml's matrix calls this, not
+# build.yml directly.
+on:
+  workflow_call:
+    inputs:
+      package:
+        required: true
+        type: string
+      stream:
+        required: true
+        type: string
+      manifest_ref:
+        required: false
+        type: string
+        default: main
+  workflow_dispatch:
+    inputs:
+      package:
+        required: true
+        type: string
+      stream:
+        required: true
+        type: string
+      manifest_ref:
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.v.outputs.ok }}
+      universe: ${{ steps.v.outputs.universe }}
+      branch: ${{ steps.v.outputs.branch }}
+      git_url: ${{ steps.v.outputs.git_url }}
+      commit: ${{ steps.v.outputs.commit }}
+      timeout: ${{ steps.v.outputs.timeout }}
+      variables: ${{ steps.v.outputs.variables }}
+    steps:
+      - id: v
+        run: |
+          set -uo pipefail
+          # ponytail: staged.json here is the minimal all-null failure shape
+          # (matches scripts/staged.R's failure path but written with jq --
+          # this job has no R). Only used when resolve itself fails.
+          fail() { # fail STAGE MESSAGE
+            jq -n --arg pkg "${{ inputs.package }}" --arg stream "${{ inputs.stream }}" \
+              --arg run_id "${{ github.run_id }}" --arg run_attempt "${{ github.run_attempt }}" \
+              --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              --arg status "failed:$1" \
+              '{schema_version:"1",package:$pkg,version:null,stream:$stream,status:$status,
+                tarball:{file:null,sha256:null,size_bytes:null},
+                source:{git_url:null,branch:null,commit:null,commit_time:null},
+                manifest_commit:null,policy_version:null,
+                build:{run_id:$run_id,run_attempt:($run_attempt|tonumber),run_url:$run_url,container:null,r_version:null},
+                check:{status:null,bioccheck:null},
+                description:{Depends:null,Imports:null,Suggests:null,License:null,NeedsCompilation:null,Priority:null,LinkingTo:null,Enhances:null,OS_type:null},
+                meta:{Title:null,Description:null,URL:null,BugReports:null,Maintainer:null,Author:null,biocViews:null}}' > staged.json
+            echo '{"ts":"'"$(date -u +%FT%TZ)"'","event":"build_failed","package":"${{ inputs.package }}","stream":"${{ inputs.stream }}","stage":"'"$1"'","message":"'"$2"'"}' > events.ndjson
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::error::FAILED at $1: $2"
+          }
+          yaml_get() { echo "$1" | grep -E "^$2:" | head -1 | sed -E "s/^$2:[[:space:]]*//; s/^\"(.*)\"\$/\1/"; }
+
+          manifest_api=$(curl -fsSL "https://api.github.com/repos/seandavi/bioc-manifest/commits/${{ inputs.manifest_ref }}") || true
+          manifest_commit=$(echo "$manifest_api" | grep -o '"sha": *"[a-f0-9]*"' | head -1 | sed -E 's/.*"([a-f0-9]+)"$/\1/')
+          if [ -z "$manifest_commit" ]; then fail resolve "could not resolve manifest_ref ${{ inputs.manifest_ref }}"; exit 0; fi
+
+          pkg_yaml=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/$manifest_commit/packages/${{ inputs.package }}.yaml") \
+            || { fail resolve "packages/${{ inputs.package }}.yaml not found at $manifest_commit"; exit 0; }
+          policy_yaml=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/$manifest_commit/policy.yaml") \
+            || { fail resolve "policy.yaml not found at $manifest_commit"; exit 0; }
+          versions_yaml=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/$manifest_commit/versions.yaml") \
+            || { fail resolve "versions.yaml not found at $manifest_commit"; exit 0; }
+
+          state=$(yaml_get "$pkg_yaml" state)
+          streams=$(yaml_get "$pkg_yaml" streams | tr -d '[]' | tr ',' '\n' | sed 's/^ *//;s/ *$//')
+          git_url=$(yaml_get "$pkg_yaml" git_url)
+          [ "$state" = active ] || { fail resolve "package state is '$state', not active"; exit 0; }
+          echo "$streams" | grep -qx "${{ inputs.stream }}" || { fail resolve "stream '${{ inputs.stream }}' not in package's streams ($streams)"; exit 0; }
+
+          policy_version=$(yaml_get "$policy_yaml" policy_version)
+          release=$(yaml_get "$versions_yaml" release_version)
+          if [ "${{ inputs.stream }}" = release ]; then
+            branch="RELEASE_$(echo "$release" | tr . _)"; universe=bioc-release
+          elif [ "${{ inputs.stream }}" = devel ]; then
+            branch=devel; universe=bioc
+          else
+            fail resolve "unknown stream '${{ inputs.stream }}'"; exit 0
+          fi
+
+          # ponytail: policy.yaml doesn't have a per-profile `build:` block
+          # yet (proposed separately against bioc-manifest); once it does,
+          # thread r_images/source_size_limit_mb here too. For now
+          # build.yml's own defaults (release only, 100MB) apply.
+          timeout=$(echo "$policy_yaml" | grep '^defaults:' | grep -o 'max_wall_minutes: *[0-9]*' | grep -o '[0-9]*')
+          [ -n "$timeout" ] || timeout=340
+
+          commit=$(git ls-remote "$git_url" "$branch" | awk '{print $1}')
+          [ -n "$commit" ] || { fail fetch "git ls-remote $git_url $branch returned nothing"; exit 0; }
+
+          # ponytail: commit_time left out of variables (and so out of
+          # staged.json) -- build-source's own COMMITINFO output has it
+          # base64-gzip-encoded; decoding it here isn't worth the complexity
+          # yet. staged.R already renders source.commit_time: null cleanly.
+          variables=$(jq -n --arg branch "$branch" --arg manifest_commit "$manifest_commit" --arg policy_version "$policy_version" \
+            '{branch: $branch, manifest_commit: $manifest_commit, policy_version: $policy_version}')
+
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "universe=$universe" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "git_url=$git_url" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
+          echo "variables=$variables" >> "$GITHUB_OUTPUT"
+      - name: upload failed:resolve artifact
+        if: ${{ !cancelled() && steps.v.outputs.ok != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staged-${{ inputs.package }}-${{ inputs.stream }}
+          path: |
+            staged.json
+            events.ndjson
+          retention-days: 14
+
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.ok == 'true'
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    uses: ./.github/workflows/build.yml
+    with:
+      universe: ${{ needs.resolve.outputs.universe }}
+      repository: ${{ needs.resolve.outputs.git_url }}
+      ref: ${{ needs.resolve.outputs.commit }}
+      organization: bioconductor
+      nobinaries: "true"
+      timeout: ${{ needs.resolve.outputs.timeout }}
+      variables: ${{ needs.resolve.outputs.variables }}
+      our_output: "true"
+      package_name: ${{ inputs.package }}
+      stream_name: ${{ inputs.stream }}
