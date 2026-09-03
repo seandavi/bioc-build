@@ -18,6 +18,23 @@ Phase 1 (see [`specs/014-phase1-realization.md`](specs/014-phase1-realization.md
 `build.yml`, `selftest.yml` and `dispatch.yml` are live. The component specs
 are in [`specs/`](specs/), starting with [`000-overview.md`](specs/000-overview.md).
 
+## Relationship to r-universe
+
+`build.yml` starts from a verbatim, sha-pinned copy of
+[r-universe-org/workflows](https://github.com/r-universe-org/workflows)'
+reusable `build.yml` -- same `build-source`/`linux-*`/`bioc-check` actions,
+same `check.Renviron`/`getdeps.R`. We only diverge where our own constraints
+force it: `actions/build-source/` is a local fork with the packaging-source
+100MB cap turned into a policy-driven env var (SPEC-014's whole reason to
+exist is packages too large for r-universe's own limit); our own `resolve`
+job reads `seandavi/bioc-manifest` and clones `git.bioconductor.org`
+directly instead of r-universe's sync mechanism; dependencies resolve
+against `bioc-registry`'s served repo instead of a `*.r-universe.dev`
+universe; and our output is `staged.json`/`events.ndjson`/attestation
+instead of r-universe's store-package/deploy. Run
+`scripts/upstream-diff.sh` to see exactly how far `build.yml` has drifted
+from upstream at any point.
+
 ## Reproducing a build locally (`selftest.yml`)
 
 `selftest.yml` runs the same resolve/fetch/deps/build/check/size pipeline as
