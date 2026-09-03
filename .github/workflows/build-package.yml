@@ -112,7 +112,10 @@ jobs:
           # staged.json) -- build-source's own COMMITINFO output has it
           # base64-gzip-encoded; decoding it here isn't worth the complexity
           # yet. staged.R already renders source.commit_time: null cleanly.
-          variables=$(jq -n --arg branch "$branch" --arg manifest_commit "$manifest_commit" --arg policy_version "$policy_version" \
+          # -c: compact, single-line -- $GITHUB_OUTPUT is key=value per line,
+          # and jq -n's default pretty-print breaks that (this actually
+          # happened: "Invalid format" on the multi-line JSON).
+          variables=$(jq -cn --arg branch "$branch" --arg manifest_commit "$manifest_commit" --arg policy_version "$policy_version" \
             '{branch: $branch, manifest_commit: $manifest_commit, policy_version: $policy_version}')
 
           echo "ok=true" >> "$GITHUB_OUTPUT"
