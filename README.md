@@ -36,6 +36,18 @@ instead of r-universe's store-package/deploy. Run
 `scripts/upstream-diff.sh` to see exactly how far `build.yml` has drifted
 from upstream at any point.
 
+Not a divergence, but worth knowing: `MY_UNIVERSE` (`https://<universe>.r-universe.dev`)
+is still set, because it's derived from `inputs.universe` in upstream's own
+workflow-level `env:` block, which we didn't touch. There's no per-job way
+to override a workflow-level `env:` value, so unsetting it would mean
+editing that verbatim block -- a real divergence, not currently made. Two
+visible effects: `entrypoint.sh` prepends `MY_UNIVERSE`'s binary repo ahead
+of ours (harmless -- it's checked first, falls through to bioc-registry/CRAN
+for anything it doesn't have), and for the `devel` stream (no `RELEASE_`
+branch special-case in `entrypoint.sh`) the built package's DESCRIPTION gets
+a `Repository:` field pointing at that r-universe URL even though nothing
+is actually published there.
+
 ## Reproducing a build locally
 
 There's no bespoke script to run by hand any more -- the actual build/check
