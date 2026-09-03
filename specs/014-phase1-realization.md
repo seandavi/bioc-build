@@ -5,6 +5,23 @@ SPEC-004/005/006/008/009 where they differ. The earlier specs remain the
 target architecture; this one is the shortest path that meets the SPEC-000
 PoC definition with the components that already exist.
 
+## Design principle (2026-09-03)
+
+**Mirror r-universe exactly; diverge only where necessary.** The build
+reuses r-universe's own components, pinned: the `build-source` container
+action, `ghcr.io/r-universe-org/base-image`, and the `linux-prep` /
+`linux-deps` / `linux-build` / `linux-check` / `bioc-check` composite
+actions from `r-universe-org/actions`. Nothing they already do (dependency
+installation, check flags, check.Renviron, system requirements) is
+re-implemented here. The intended divergences are: source-only (no
+windows/macos/wasm jobs) because experiment-data and workflow packages have
+no binaries worth building; resolve from bioc-manifest and clone from
+git.bioconductor.org instead of their sync/monorepo; the dependency repo is
+bioc-registry's `/repo/<universe>`; and the output is an attested staged
+artifact instead of `store-package`. No step depends on
+`https://bioconductor.org`; the version pair lives in bioc-manifest
+`versions.yaml`.
+
 ## The cuts, in one table
 
 | Spec said | Phase 1 does | Why |
