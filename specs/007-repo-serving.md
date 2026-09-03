@@ -9,6 +9,13 @@ deterministically from snapshots, served from R2 behind the CDN at
 Bioconductor-controlled URLs, consumable by stock `install.packages` /
 `BiocManager` with zero client changes.
 
+A bioc-build artifact enters bioc-registry's *existing* served repo
+(`/repo/{universe}/…`, already generated from the propagated index) — see
+SPEC-000 "What bioc-registry already provides". This spec's tree layout
+and index-generation contract below is the phase-2 target once bioc-build
+runs its own repo tree; SPEC-014 is normative for phase 1, where entries
+land in the existing `bioc`/`bioc-release` universes with no new tree.
+
 ## Scope / non-goals
 
 - In scope: repo tree layout, index generation (module executed by

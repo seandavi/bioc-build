@@ -47,6 +47,39 @@ they honor the data contracts in their spec.
 | 012 | Agent triage | 3 | 009, 002 |
 | 013 | Push detection fast path | 2 (Layer 0 opt. 1) | 008, 009 |
 
+## What bioc-registry already provides
+
+This repo builds and stages; it never runs its own store, index, or served
+repo. bioc-registry (`seandavi/bioc-registry`) already has all of that
+running for r-universe-built packages, and phase 1 (SPEC-014) reuses it
+directly rather than re-specifying it:
+
+| Already running in bioc-registry | What this repo adds |
+|---|---|
+| Content-addressed artifact store, `prop/{universe}/cas/{sha256}` | New artifacts — from packages `git.bioconductor.org` hosts that no r-universe build produces |
+| Propagated index, a fold of observations, `prop/{universe}/index.json` | `origin: bioc-build` entries in that same fold (SPEC-014 `POST /publish`) |
+| Parquet archive of build/check history, queried from DuckDB (`parquet/jobs/…`) | A comparable per-run record for bioc-build runs (phase 1: `events.ndjson` inside the staged artifact, SPEC-014; phase 2: full SPEC-009 catalog) |
+| Served `/repo/{universe}/…` with `PACKAGES`/`VIEWS`, immutable CAS objects behind the CDN | Nothing new — bioc-build entries land in the existing served repo (`bioc`, `bioc-release`) via the existing route |
+| r-universe poller (`/poll`) | Nothing — bioc-build packages never go through r-universe |
+| Digest-keyed, idempotent Cloudflare Workflows (bioc-infrastructure ADR 0007) | Reuses the pattern: `publish.yml` (SPEC-014) is a cron, not a queue, but is idempotent and self-healing the same way |
+
+Per ADR 0010, the Worker-shaped components this repo's earlier specs
+describe as new (SPEC-005 presign, SPEC-006 publisher, SPEC-008 dispatcher,
+SPEC-009 ingest) land as additions *inside* bioc-registry or as GitHub
+Actions in the trusted repo, not as new standalone services — see SPEC-014.
+The R2 prefixes above stay the contract between bioc-build and
+bioc-registry regardless of which side of that line a given check runs on.
+
+Results also need to reach the website: bioc-website renders landing pages
+and check-result pages from bioc-registry's data plane, not from this
+repo's event archive directly (`docs/DATAPLANE.md` in bioc-registry —
+producers publish plain, documented, immutable-where-possible artifacts
+over HTTP GET; the SPEC-009 dashboard is a separate, additional SPA, not
+the delivery mechanism to bioc-website). A bioc-build result becomes
+visible on bioc-website by landing under that contract (extending
+`parquet/jobs/…` or a sibling prefix), not by any new
+bioc-build-owned surface.
+
 ## Dependency notes for parallel development
 
 - SPEC-001 (ledger schema) and SPEC-003 (policy schema) are pure data

@@ -10,6 +10,12 @@ into the content-addressed store, appends ledger records, folds, writes
 snapshots + HEAD, and regenerates repo indexes. ~Small by design; every
 check enumerable.
 
+A bioc-build artifact enters bioc-registry's *existing* content-addressed
+store and served repo (SPEC-000 "What bioc-registry already provides") —
+this component does not stand up a new store or a new repo tree. The
+"~2k LoC" budget below is lines *added* to bioc-registry, not the size of
+a new service.
+
 ## Scope / non-goals
 
 - In scope: promotion pipeline, verification checks, ledger append
@@ -89,9 +95,9 @@ write. Rejections are events, not ledger records.
   duplicate seq and correct HEAD.
 - End-to-end: real build (SPEC-004) → published; tampered tarball in
   staging → `publish_rejected{attestation}`.
-- Total publisher TS ≲ 2k LoC excluding generated validators (guard
-  against scope creep — if it grows past this, something is in the wrong
-  component).
+- Total lines added to bioc-registry for this pipeline ≲ 2k LoC excluding
+  generated validators (guard against scope creep — if it grows past this,
+  something is in the wrong component).
 
 ## Open questions
 

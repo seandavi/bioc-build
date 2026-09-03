@@ -9,6 +9,18 @@ r-universe`) into the same ledger, blob store, and served repo — making
 backends invisible to users, turning the escrow mirror into the primary
 record, and reducing r-universe to a swappable build farm.
 
+**This is not a new poller.** bioc-registry already runs exactly this
+path: a scheduled poller against r-universe (`/poll`, gated) writes
+observations (`obs/{universe}/dt=…`), a propagation gate turns each
+observation into candidates (`prop/{universe}/pending/…`), and passing
+candidates are folded into `prop/{universe}/index.json` — the index the
+served repo (`/repo/{universe}/…`) reads. What follows restates that
+existing path in SPEC-001 ledger terms and adds one thing: hash-chained,
+auditable `external_publish` records so the fold has the same provenance
+guarantees a bioc-build publish does. No new poller, store, or served
+repo ships from this spec — see SPEC-000 "What bioc-registry already
+provides" and bioc-registry's `docs/api.md`.
+
 ## Scope / non-goals
 
 - In scope: polling r-universe state, artifact mirroring, external_publish
@@ -17,11 +29,12 @@ record, and reducing r-universe to a swappable build farm.
 - Non-goals: building software ourselves (manifest flip + SPEC-004 profile
   work, deliberately deferred), revdep logic (SPEC-011).
 
-## Poller
+## Poller (existing, in bioc-registry)
 
-Scheduled Worker against `https://bioc.r-universe.dev` (and any other
-relevant universes) using r-universe's public APIs (`/api/packages`,
-snapshot API):
+Scheduled Worker (`/poll`) already running in bioc-registry against
+`https://bioc.r-universe.dev` (and any other relevant universes) using
+r-universe's public APIs (`/api/packages`, snapshot API); described here
+only where this spec's ledger framing adds or changes a step:
 
 1. Enumerate current packages/versions per platform; diff against ledger
    fold for the corresponding stream.
