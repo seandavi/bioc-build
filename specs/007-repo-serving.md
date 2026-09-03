@@ -1,6 +1,6 @@
 # SPEC-007: Repository layout, serving, and BiocManager integration
 
-Status: draft v0.1 · Phase 1 · Static R2 + CDN (no compute on read path)
+Status: draft v0.2 · Phase 1 · Static R2 + CDN (no compute on read path)
 
 ## Purpose
 
@@ -33,12 +33,12 @@ repo/<bioc_version>/<component>/meta/
   head.json           # {snapshot_sha256, ledger_seq, generated_at}
 ```
 
-`<bioc_version>` ∈ {"3.22", "devel", …}; `<component>` ∈
+`<bioc_version>` ∈ {"3.23", "devel", …}; `<component>` ∈
 {"data-experiment", "workflows"} for PoC. A stream's channel maps:
 release → its bioc_version path; devel → `devel`.
 
 Client usage (PoC): users add
-`https://repo.<d>/3.22/data-experiment` etc. via option;
+`https://repo.<d>/3.23/data-experiment` etc. via option;
 target state: `BiocManager::repositories()` returns these URLs (coordinate
 with BiocManager maintainers — tracked as EXT-7.1, external dependency).
 

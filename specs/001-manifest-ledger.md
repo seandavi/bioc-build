@@ -1,6 +1,6 @@
 # SPEC-001: Manifest ledger and snapshots
 
-Status: draft v0.1 · Phase 1 · Pure data contract (no runtime component)
+Status: draft v0.2 · Phase 1 · Pure data contract (no runtime component)
 
 ## Purpose
 
@@ -33,7 +33,7 @@ immutable once a later segment exists.
   "seq": 4217,
   "prev_sha256": "<sha256 of JCS serialization of record seq-1>",
   "record_type": "publish",
-  "stream": {"bioc_version": "3.22", "component": "data-experiment", "channel": "release"},
+  "stream": {"bioc_version": "3.23", "component": "data-experiment"},
   "recorded_at": "2026-09-03T18:42:11Z",
   "recorded_by": {"actor": "publisher", "version": "<publisher release>"}
 }
@@ -67,7 +67,7 @@ distinguish replacement from coexisting versions in audit queries; fold
 effect identical to the new publish under latest-wins.
 
 **freeze** — pins a release. Fields: `snapshot_sha256`, `as_of_seq`,
-`label` (e.g. "3.22 branch point"). After a freeze on a `release` channel,
+`label` (e.g. "3.23 branch point"). After a freeze on a `release` channel,
 subsequent publishes require `exception {approved_by, reference}`.
 
 **policy** — records that policy_version changed for this stream. Fields:

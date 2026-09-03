@@ -1,6 +1,6 @@
-# SPEC-004: Build workflows (bioc-builder)
+# SPEC-004: Build workflows (bioc-build)
 
-Status: draft v0.1 · Phase 1 · GitHub Actions in public build repo
+Status: draft v0.2 · Phase 1 · GitHub Actions in public build repo
 
 ## Purpose
 
@@ -18,9 +18,9 @@ fit; deviates only where profiles require.
 
 ## Repo
 
-`bioc-builder/build` (public). Contains:
+`seandavi/bioc-build` (public). Contains:
 - `.github/workflows/build.yml` — reusable workflow, inputs:
-  `{package, stream_id, source_ref, registry_commit, policy_version}`.
+  `{package, stream_id, source_ref, manifest_commit, policy_version}`.
 - `.github/workflows/selftest.yml` — maintainer-droppable test workflow
   (mirrors build.yml, skips staging/attestation, same envelope).
 - Composite actions vendored or referenced from r-universe-org where
@@ -29,7 +29,7 @@ fit; deviates only where profiles require.
 
 ## Workflow steps (normative sequence)
 
-1. **Resolve**: check out registry at `registry_commit`; load entry; resolve
+1. **Resolve**: check out the manifest at `manifest_commit`; load entry; resolve
    effective policy (SPEC-003 resolver); resolve branch_map → confirm
    `source_ref` matches (defense in depth vs dispatcher bug). Emit
    `build_started`.
@@ -50,7 +50,7 @@ fit; deviates only where profiles require.
 8. **Stage**: request presigned URLs from SPEC-005 (OIDC); upload tarball,
    attestation bundle, logs, and a `staged.json` manifest
    `{package, version, stream_id, sha256, attestation_bundle_sha256,
-   registry_commit, policy_version, source: {git_url, commit, ref},
+   manifest_commit, policy_version, source: {git_url, commit, ref},
    build: {workflow_run_url, run_attempt, runner_image}}`.
    Emit `artifact_staged{run_id, staged_manifest_sha256}` — this event is
    the publisher's trigger.
@@ -73,8 +73,8 @@ is down (staging manifest is the durable record; publisher backfills).
 ## Self-test workflow contract
 
 Same steps 1–6 (no attest/stage), runnable from any fork with
-`uses: bioc-builder/build/.github/workflows/selftest.yml@v1`. Inputs
-default to `{stream: devel, profile: from-registry-or-input}`. This is the
+`uses: seandavi/bioc-build/.github/workflows/selftest.yml@v1`. Inputs
+default to `{stream: devel, profile: from-manifest-or-input}`. This is the
 reproduction harness cited by governance (limit_flagged evidence) and
 phase-3 agents; treat its interface as stable API.
 

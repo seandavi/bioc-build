@@ -1,6 +1,6 @@
 # SPEC-003: Policy file and build profiles
 
-Status: draft v0.1 · Phase 1 · Versioned config (no runtime)
+Status: draft v0.2 · Phase 1 · Versioned config (no runtime)
 
 ## Purpose
 
@@ -20,7 +20,7 @@ making policy part of provenance.
 
 ## Location and versioning
 
-`policy/policy.yaml` in the registry repo (same governance, one PR can
+`policy/policy.yaml` in the manifest repo (same governance, one PR can
 coherently change profile + affected package overrides). `policy_version`
 is CalVer `YYYY.MM.patch`, bumped by CI on any change to the file; the file
 embeds its own version. Publisher records `policy_version` +
@@ -68,14 +68,14 @@ profiles:
       scheduled_refresh: monthly
     envelope:
       max_wall_minutes: 340        # explicit: workflow vignettes are slow
-overrides_schema:                  # what registry per-package overrides may set
+overrides_schema:                  # what manifest per-package overrides may set
   allowed_keys: [checks[].fail_on, envelope.max_wall_minutes, build.vignettes]
 ```
 
 ## Semantics
 
-- Layering: defaults → profile → registry per-package `policy.overrides`.
-  Only `overrides_schema.allowed_keys` may be overridden; registry CI
+- Layering: defaults → profile → manifest per-package `policy.overrides`.
+  Only `overrides_schema.allowed_keys` may be overridden; manifest CI
   enforces (SPEC-002).
 - `runner_envelope` is the published maintainer contract ("your package must
   build within standard GitHub Actions limits"); `size_report` check emits
@@ -105,7 +105,7 @@ overrides_schema:                  # what registry per-package overrides may set
 ## Open questions
 
 - OQ-3.1: r_version → stream mapping table location (here vs SPEC-004).
-  Default: here, as `r_map: {devel: "R-devel", "3.22": "4.5"}` block.
+  Default: here, as `r_map: {devel: "R-devel", "3.23": "4.6"}` block.
 - OQ-3.2: Should workflow-package check severity be stricter than BBS
   historical practice? Gather PoC failure data first.
 - OQ-3.3: `scheduled_refresh: monthly` — needed at all for source-only

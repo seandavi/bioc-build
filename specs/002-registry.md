@@ -1,6 +1,6 @@
-# SPEC-002: Package registry
+# SPEC-002: Package manifest
 
-Status: draft v0.1 · Phase 1 · Git repo + CI validation (no service runtime)
+Status: draft v0.2 · Phase 1 · Git repo + CI validation (no service runtime)
 
 ## Purpose
 
@@ -12,19 +12,20 @@ which policy profile and backend. All changes via PR. The publisher
 ## Scope / non-goals
 
 - In scope: repo layout, entry schema, validation CI, governance states,
-  publisher-facing checks, registry_updated event.
+  publisher-facing checks, manifest_updated event.
 - Non-goals: build results, current versions, artifact hashes (ledger's
   job); policy profile *contents* (SPEC-003); maintainer outreach workflows
   (SPEC-012 consumes states defined here).
 
 ## Repo layout
 
+`seandavi/bioc-manifest` (its own repo, per ADR 0010):
+
 ```
-registry/
-  packages/<name>.yaml        # one file per package, flat
-  schema/registry.linkml.yaml # source of truth for schema
-  CODEOWNERS                  # routes reviews by path/class
-  .github/workflows/validate.yml
+packages/<name>.yaml         # one file per package, flat
+schema/manifest.linkml.yaml  # source of truth for schema
+CODEOWNERS                   # routes reviews by path/class
+.github/workflows/validate.yml
 ```
 
 PoC population: all current experiment data packages + workflow packages,
@@ -52,7 +53,7 @@ streams:
 policy:
   profile: data-experiment          # must exist in SPEC-003 policy file
   overrides: {}                     # reviewed exceptions; schema per SPEC-003
-backend: bioc-builder               # bioc-builder | r-universe
+backend: bioc-build                 # bioc-build | r-universe
 status:
   state: active                     # active | limit_flagged | deprecated | archived
   since: "2016-04-12"
@@ -73,24 +74,24 @@ admission:
 - State transitions legal: active ↔ limit_flagged; {active,limit_flagged} →
   deprecated → archived. No resurrection from archived without new
   admission block.
-- On merge to main: emit `registry_updated` event (SPEC-009) with
-  `{registry_commit, changed_packages[], actor}`.
+- On merge to main: emit `manifest_updated` event (SPEC-009) with
+  `{manifest_commit, changed_packages[], actor}`.
 
 ## Publisher-facing contract
 
 Publisher promotion checks (enumerated; SPEC-006 implements verbatim):
 
 1. Staged DESCRIPTION `Package:` exists as `packages/<name>.yaml` at the
-   registry commit the publisher has pinned.
+   manifest commit the publisher has pinned.
 2. `status.state` ∈ {active, limit_flagged}.
 3. Target stream's bioc_version ∈ [first_bioc_version, last_bioc_version].
 4. `streams.component` equals target stream component.
 5. Attestation source repo == `source.git_url`.
 6. Built ref == resolved `branch_map` for target channel.
-7. `backend` == bioc-builder (external_publish path checks
+7. `backend` == bioc-build (external_publish path checks
    backend == r-universe instead).
 
-Registry consumption model: publisher and dispatcher read a checked-out
+Manifest consumption model: publisher and dispatcher read a checked-out
 commit (updated by polling main), and record that commit sha in everything
 they emit. No live-file reads.
 
@@ -101,7 +102,7 @@ they emit. No live-file reads.
   silently fixed.
 - CI rejects each class of invalid fixture (bad state transition, dangling
   profile, template that resolves to a missing branch).
-- `registry_updated` events observed in archive for merges.
+- `manifest_updated` events observed in archive for merges.
 
 ## Open questions
 

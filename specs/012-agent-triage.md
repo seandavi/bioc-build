@@ -1,6 +1,6 @@
 # SPEC-012: Agentic build triage
 
-Status: draft v0.1 · Phase 3 · Agent repo (Actions-scheduled, stateless invocations)
+Status: draft v0.2 · Phase 3 · Agent repo (Actions-scheduled, stateless invocations)
 
 ## Purpose
 
@@ -12,7 +12,7 @@ event archive.
 ## Trust boundary (normative, restated from SPEC-000)
 
 Agent identity has: GitHub App permissions to open issues/PRs on enrolled
-repos + the registry, and event-ingest rights (own audience). It has NO
+repos + the manifest, and event-ingest rights (own audience). It has NO
 staging-upload rights (SPEC-005 rejects its workflow_ref), no publisher
 access, no repo-write anywhere. Worst-case compromise = bad PR/issue,
 contained by human merge gates. Build logs and upstream repos are untrusted
@@ -34,7 +34,7 @@ Stateless invocations run inside scheduled Actions jobs in the agent repo
 
 Stages:
 1. **Gather**: failure events + logs, package event history, last-good vs
-   first-bad upstream diff, deps_resolved deltas, registry entry.
+   first-bad upstream diff, deps_resolved deltas, manifest entry.
 2. **Reproduce** (honesty gate): fork/branch + self-test workflow pinned to
    failing policy_version; a diagnosis without a reproduction run URL
    cannot advance. Non-reproducing → `flaky` outcome, case closed with
@@ -46,16 +46,16 @@ Stages:
    self-test on patch branch (must be green), audit diff minimality and
    absence of unrelated changes, verify claims in PR body against thread
    evidence. Only checker approval releases delivery.
-5. **Deliver** per registry `triage` field: `auto_pr` → PR to maintainer
+5. **Deliver** per manifest `triage` field: `auto_pr` → PR to maintainer
    repo (body generated from thread: failing event, differential, repro
    link, rationale, green patch run); `issue_only` (default) → issue with
    evidence + suggested approach; envelope-breach cases additionally →
-   registry `limit_flagged` PR with limit_watch evidence. `none` → case
+   manifest `limit_flagged` PR with limit_watch evidence. `none` → case
    recorded, nothing filed.
 6. **Outcome loop**: webhook/poller records merged/closed/ignored + time-to-
    resolution as events → precision-by-failure-class query → autonomy
    ratchet proposals (move a class issue_only→auto_pr) are themselves
-   registry-policy PRs for humans.
+   manifest-policy PRs for humans.
 
 Escalation: unclassifiable after reproduction → human queue issue in the
 ops repo with organized case file. Failure mode is a tidy dossier, never
@@ -73,7 +73,7 @@ is a standing catalog query.
 1. Shadow: cases run gather+repro+diagnose, deliver nothing; core team
    reviews diagnosis quality (target ≥ 80% agreed-correct on 50 cases).
 2. `issue_only` default for enrolled packages (enrollment = maintainer-
-   initiated registry PR; announce, don't impose).
+   initiated manifest PR; announce, don't impose).
 3. `auto_pr` per class, evidence-gated by outcome data.
 
 ## Acceptance criteria

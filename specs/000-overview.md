@@ -1,6 +1,6 @@
 # SPEC-000: System overview, seams, and phasing
 
-Status: draft v0.1 · Owner: TBD · Last updated: 2026-09-03
+Status: draft v0.2 · Owner: TBD · Last updated: 2026-09-03
 
 ## Context
 
@@ -13,7 +13,7 @@ per-package configuration value rather than an architectural commitment, and
 ## PoC definition
 
 **Experiment data packages and workflow packages, unified under the new build
-system**: both classes built by `bioc-builder` (SPEC-004), published through
+system**: both classes built by `bioc-build` (SPEC-004), published through
 one ledger (SPEC-001), served from one CRAN-style static repo (SPEC-007) that
 `BiocManager::repositories()` can consume. Success = a user installs an
 experiment data package and a workflow package from the new repo with stock
@@ -25,7 +25,7 @@ revdep checking, agent triage.
 
 ## Components and seams
 
-Every seam is one of three things: **a file in a git repo** (registry, policy),
+Every seam is one of three things: **a file in a git repo** (manifest, policy),
 **an object in R2** (blobs, ledger, snapshots, indexes), or **an event**
 (NDJSON record in the archive). No component calls another component's code.
 Components may be developed, tested, and replaced independently so long as
@@ -34,7 +34,7 @@ they honor the data contracts in their spec.
 | Spec | Component | Phase | Depends on (contracts only) |
 |------|-----------|-------|------------------------------|
 | 001 | Manifest ledger + snapshots | 1 | — (foundational contract) |
-| 002 | Registry | 1 | 003 (profile names) |
+| 002 | Manifest | 1 | 003 (profile names) |
 | 003 | Policy + profiles | 1 | — |
 | 004 | Build workflows | 1 | 002, 003, 005, 009 |
 | 005 | Staging upload service | 1 | — |
@@ -65,12 +65,12 @@ they honor the data contracts in their spec.
 
 ## Trust domains
 
-1. **Governance (human)**: registry repo + policy repo. All changes via PR.
+1. **Governance (human)**: manifest repo + policy repo. All changes via PR.
 2. **Build (untrusted)**: public build repo on GitHub-hosted runners. Can
    write only to staging prefix via short-lived presigned URLs. Holds no
    long-lived credentials.
 3. **Publish (trusted)**: publisher Worker/DO. Sole writer to published
-   prefixes and ledger. Verifies attestations against registry before any
+   prefixes and ledger. Verifies attestations against the manifest before any
    promotion.
 4. **Observe (read-mostly)**: event ingest Worker (append-only writes to
    archive prefix), catalog jobs, dashboards. No write access to published
@@ -84,17 +84,18 @@ they honor the data contracts in their spec.
 - All hashes sha256, lowercase hex, prefixed field names `*_sha256`.
 - All NDJSON records carry `schema_version` (string) as first field.
 - Canonical JSON serialization for hashing: RFC 8785 (JCS).
-- R2 bucket layout (single bucket `bioc-builder`, prefixes are the seams):
-  - `blobs/sha256/<aa>/<full-sha>` — content-addressed artifacts (immutable)
-  - `staging/<run-id>/<filename>` — build outputs pre-verification (TTL 14d)
-  - `ledger/<stream-id>/<seq-start>-<seq-end>.ndjson` — ledger segments
-  - `snapshots/<sha256>.json` and `snapshots/<sha256>.parquet`
-  - `head/<stream-id>.json` — the only mutable pointers
-  - `repo/...` — generated CRAN-style tree (SPEC-007)
-  - `events/raw/<date>/<uuid>.ndjson` — event archive (SPEC-009)
-  - `events/catalog/...parquet` — compacted catalog (SPEC-009)
-- Stream id format: `<bioc_version>/<component>/<channel>`, e.g.
-  `3.22/data-experiment/release`, `devel/workflows/devel`.
+- R2 bucket layout: the existing bioc-registry bucket `bioc-prop`, whose live
+  prefixes are `prop/{universe}/…` (index, content-addressed artifacts,
+  propagation log), `obs/`, `parquet/`, `logs/`, `state/` — see
+  bioc-registry's `docs/api.md` "Storage keys". This repo does not invent a
+  parallel layout; anything it writes goes under these prefixes or into a
+  build repo's own GitHub artifacts (SPEC-014). The `ledger/`, `snapshots/`,
+  and `head/` prefixes in SPEC-001 are **phase 2** — not live in `bioc-prop`
+  today.
+- Stream id format: `<bioc_version>/<component>` (no separate channel
+  segment — it is derivable from `bioc_version`: a release number implies
+  `release`, the literal `devel` implies `devel`), e.g. `3.23/data-experiment`,
+  `devel/workflows`.
 
 ## Sequencing
 
@@ -117,6 +118,11 @@ permits). Exit:
 - OQ-0.1: Single R2 bucket with prefix-scoped API tokens vs. separate buckets
   per trust domain. Default: separate buckets for `staging` vs everything
   else; revisit if token scoping proves sufficient.
-- OQ-0.2: Naming. "bioc-builder" used throughout as placeholder.
-- OQ-0.3: Which GitHub org hosts build/agent repos; relationship to existing
-  Bioconductor org permissions model.
+- ~~OQ-0.2: Naming.~~ Resolved by bioc-infrastructure
+  [ADR 0010](https://github.com/seandavi/bioc-infrastructure/blob/main/adr/0010-two-new-repos-for-the-build-system-and-the-manifest-name.md):
+  this system is **bioc-build**; the governance list is the **manifest**
+  (bioc-manifest), never "the registry" — "registry" means bioc-registry,
+  the data plane.
+- ~~OQ-0.3: Which GitHub org hosts build/agent repos.~~ Resolved by ADR 0010:
+  no new GitHub org; repos live under `seandavi/`
+  (`seandavi/bioc-build`, `seandavi/bioc-manifest`, `seandavi/bioc-registry`).

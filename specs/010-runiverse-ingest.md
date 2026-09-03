@@ -1,6 +1,6 @@
 # SPEC-010: r-universe ingest and unified repository
 
-Status: draft v0.1 · Phase 2 · Poller Worker + publisher intake path
+Status: draft v0.2 · Phase 2 · Poller Worker + publisher intake path
 
 ## Purpose
 
@@ -14,7 +14,7 @@ record, and reducing r-universe to a swappable build farm.
 - In scope: polling r-universe state, artifact mirroring, external_publish
   intake path in the publisher, unified fold/serving, drift detection,
   binary handling.
-- Non-goals: building software ourselves (registry flip + SPEC-004 profile
+- Non-goals: building software ourselves (manifest flip + SPEC-004 profile
   work, deliberately deferred), revdep logic (SPEC-011).
 
 ## Poller
@@ -41,8 +41,8 @@ snapshot API):
 `external_publish` path replaces attestation verification with:
 - artifact sha256 matches fetched bytes (poller-declared, publisher
   re-verified);
-- registry checks: entry exists, `backend: r-universe`, state/stream/
-  component checks as standard (source-repo check compares registry
+- manifest checks: entry exists, `backend: r-universe`, state/stream/
+  component checks as standard (source-repo check compares manifest
   git_url to r-universe's upstream URL for the package);
 - provenance recorded is honest about its weaker basis: `external` block,
   no attestation. Trust differential is explicit in the ledger, queryable.
@@ -64,8 +64,8 @@ snapshot API):
   continuous drift check green for 30 days.
 - Install-equivalence test matrix: package set installs identically from
   unified repo vs r-universe URLs (source + binaries, 3 platforms).
-- Documented, rehearsed runbook: "flip package X to backend: bioc-builder"
-  (registry PR → backfill dispatch → published from own build) exercised on
+- Documented, rehearsed runbook: "flip package X to backend: bioc-build"
+  (manifest PR → backfill dispatch → published from own build) exercised on
   ≥ 5 real software packages as a drill (then optionally flipped back).
 
 ## Open questions

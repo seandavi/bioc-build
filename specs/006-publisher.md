@@ -1,11 +1,11 @@
 # SPEC-006: Publisher
 
-Status: draft v0.1 · Phase 1 · Cloudflare Worker + Durable Object per stream
+Status: draft v0.2 · Phase 1 · Cloudflare Worker + Durable Object per stream
 
 ## Purpose
 
 The sole trusted writer. Consumes `artifact_staged` triggers, verifies the
-full chain (attestation → registry authorization → policy), promotes blobs
+full chain (attestation → manifest authorization → policy), promotes blobs
 into the content-addressed store, appends ledger records, folds, writes
 snapshots + HEAD, and regenerates repo indexes. ~Small by design; every
 check enumerable.
@@ -37,10 +37,10 @@ check enumerable.
    DESCRIPTION; compute dcf_sha256; parse fields.
 3. Verify attestation bundle: sigstore verification; subject digest ==
    tarball sha256; certificate identity claims: repository ==
-   `<org>/build`, workflow == `build.yml`, and `source` claims consistent
-   with staged.json `{git_url, commit}`.
-4. Registry checks 1–7 verbatim from SPEC-002 at the publisher's pinned
-   registry commit (recorded in the ledger record).
+   `seandavi/bioc-build`, workflow == `build.yml`, and `source` claims
+   consistent with staged.json `{git_url, commit}`.
+4. Manifest checks 1–7 verbatim from SPEC-002 at the publisher's pinned
+   manifest commit (recorded in the ledger record).
 5. Policy consistency: staged `policy_version` is current-or-recent
    (configurable window, default: current or previous) for the stream; if
    the version is unseen in this stream's ledger, first append a `policy`

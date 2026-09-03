@@ -1,6 +1,6 @@
 # SPEC-005: Staging upload service
 
-Status: draft v0.1 · Phase 1 · Cloudflare Worker · **Prototype first**
+Status: draft v0.2 · Phase 1 · Cloudflare Worker · **Prototype first**
 
 ## Purpose
 
@@ -20,7 +20,7 @@ staged objects to a verified workflow identity.
 
 `POST /v1/presign`
 - Auth: `Authorization: Bearer <GitHub OIDC JWT>` (audience
-  `bioc-builder-staging`).
+  `bioc-build-staging`).
 - Body: `{"run_id": "<workflow run id>", "files": [{"name":
   "curatedTCGAData_1.28.1.tar.gz", "sha256": "…", "size_bytes": N}, …]}`
 - Response 200: `{"prefix": "staging/<run_id>/", "urls": [{"name": …,
@@ -32,9 +32,9 @@ staged objects to a verified workflow identity.
 
 Verify signature against GitHub's JWKS (cached, kid-rotation tolerant);
 then require ALL of:
-- `aud == "bioc-builder-staging"`
-- `repository == "<org>/build"` (exact, configured)
-- `workflow_ref` starts with `<org>/build/.github/workflows/build.yml@refs/`
+- `aud == "bioc-build-staging"`
+- `repository == "seandavi/bioc-build"` (exact, configured)
+- `workflow_ref` starts with `seandavi/bioc-build/.github/workflows/build.yml@refs/`
   (self-test workflow is NOT authorized — it must never stage)
 - `run_id` claim == body `run_id`
 - token `iat` within 15 min; single-use per (run_id, name) — replay of an
@@ -84,4 +84,4 @@ any future upload surface (Nextflow telemetry, build-tracker). API:
 - OQ-5.2: Non-GitHub upstreams (git.bioconductor.org-only packages, OQ-2.2)
   still build in the central repo, so OIDC identity is unaffected — but
   attestation `source` binding weakens. Document as accepted risk or
-  require GitHub mirrors for bioc-builder backend.
+  require GitHub mirrors for bioc-build backend.

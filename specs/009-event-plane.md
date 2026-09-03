@@ -1,6 +1,6 @@
 # SPEC-009: Event plane (ingest, archive, catalog, surfaces)
 
-Status: draft v0.1 · Phase 1 minimal (ingest + raw archive) / Phase 2 full
+Status: draft v0.2 · Phase 1 minimal (ingest + raw archive) / Phase 2 full
 
 ## Purpose
 
@@ -38,17 +38,17 @@ Event type registry lives in this spec's repo as LinkML: one payload schema
 per type, producers PR new types here (keeps the catalog columnarizable).
 Phase-1 types: build_started, deps_resolved, tarball_built,
 check_completed, size_report, build_failed, artifact_staged, published,
-publish_rejected, registry_updated, build_dispatched, policy (mirror).
+publish_rejected, manifest_updated, build_dispatched, policy (mirror).
 
 ## Ingest
 
 `POST /v1/events` (batch NDJSON body, ≤ 1 MB):
 - Auth per producer class: GitHub OIDC via `gh-oidc-verify` (SPEC-005 lib;
-  audience `bioc-builder-events`; repo allowlist includes build repo AND
+  audience `bioc-build-events`; repo allowlist includes build repo AND
   self-test forks — self-test events are accepted but tagged
   `producer.identity` accordingly and excluded from official surfaces);
   Cloudflare service bindings for internal producers (publisher,
-  dispatcher, registry CI via a scoped token).
+  dispatcher, manifest CI via a scoped token).
 - Ingest validates envelope only (payload schema validation is
   catalog-time, permissive-in strict-out); stamps received_at; appends to
   `events/raw/<yyyy-mm-dd>/<uuid>.ndjson` batch objects.
@@ -67,7 +67,7 @@ publish_rejected, registry_updated, build_dispatched, policy (mirror).
   Parquet view refreshed by the compactor — sufficient for dispatcher
   change/retry queries and PoC status page.
 - Joins available cross-domain: snapshot Parquet (SPEC-001) + catalog share
-  DuckDB conventions; e.g. registry_updated × published for
+  DuckDB conventions; e.g. manifest_updated × published for
   "authorized-when-published" audits.
 
 ## Read surfaces
@@ -82,7 +82,7 @@ publish_rejected, registry_updated, build_dispatched, policy (mirror).
 - Trend query (governance input): scheduled query over size_report events
   producing `limit_watch.parquet` (packages within 20% of envelope on
   disk/wall, or tarball growth > X%/release) — the evidence feed for
-  registry `limit_flagged` PRs.
+  manifest `limit_flagged` PRs.
 
 ## Acceptance criteria
 

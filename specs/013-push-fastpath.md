@@ -1,6 +1,6 @@
 # SPEC-013: Push detection fast path
 
-Status: draft v0.1 · Phase 2 (Layer 0 optionally phase 1) · Hook + GitHub App + receiver Worker
+Status: draft v0.2 · Phase 2 (Layer 0 optionally phase 1) · Hook + GitHub App + receiver Worker
 
 ## Purpose
 
@@ -24,7 +24,7 @@ fast-path outage degrades latency only.
   (shared-secret HMAC; secret held in bioc-git server config and Worker
   env).
 - Covers every package with zero maintainer action (Bioconductor operates
-  the upstream). For registry entries whose `source.git_url` is bioc-git,
+  the upstream). For manifest entries whose `source.git_url` is bioc-git,
   this is complete coverage; for GitHub-canonical packages it still
   catches pushes flowing through bioc-git (e.g. release branches).
 - May land in phase 1 if bioc-git server access is straightforward;
@@ -38,10 +38,10 @@ fast-path outage degrades latency only.
 - Maintainer action: Install → select repos (or whole org). Two clicks.
   Org-level install covers all repos in the org.
 - Receiver verifies GitHub App webhook HMAC (X-Hub-Signature-256), maps
-  repo → registry package(s) (via `source.git_url` index), filters pushed
+  repo → manifest package(s) (via `source.git_url` index), filters pushed
   ref against resolved branch_map for active streams, and emits
   `upstream_push{package, stream_ids[], ref, sha, via: "github-app"}`.
-  Non-registry repos and non-tracked refs are dropped silently.
+  Repos absent from the manifest and non-tracked refs are dropped silently.
 - Installation lifecycle events (`installation`,
   `installation_repositories`) are emitted as `fastpath_coverage_changed`
   events → catalog maintains per-package coverage status.
