@@ -31,21 +31,21 @@ Every seam is one of three things: **a file in a git repo** (manifest, policy),
 Components may be developed, tested, and replaced independently so long as
 they honor the data contracts in their spec.
 
-| Spec | Component | Phase | Depends on (contracts only) |
-|------|-----------|-------|------------------------------|
-| 001 | Manifest ledger + snapshots | 1 | — (foundational contract) |
-| 002 | Manifest | 1 | 003 (profile names) |
-| 003 | Policy + profiles | 1 | — |
-| 004 | Build workflows | 1 | 002, 003, 005, 009 |
-| 005 | Staging upload service | 1 | — |
-| 006 | Publisher | 1 | 001, 002, 003, 005, 009 |
-| 007 | Repo serving + BiocManager | 1 | 001 |
-| 008 | Dispatcher + cron tier | 1 | 002, 009 |
-| 009 | Event plane | 1 (minimal) / 2 (full) | 001 (shares R2 conventions) |
-| 010 | r-universe ingest + mirror | 2 | 001, 006, 009 |
-| 011 | Revdep check scheduler | 3 | 009, 004 (check harness) |
-| 012 | Agent triage | 3 | 009, 002 |
-| 013 | Push detection fast path | 2 (Layer 0 opt. 1) | 008, 009 |
+| Spec | Component | Phase | Depends on (contracts only) | Phase-1 realization |
+|------|-----------|-------|------------------------------|----------------------|
+| 001 | Manifest ledger + snapshots | 1 | — (foundational contract) | SPEC-014 §bioc-registry: `prop/{u}/log/` records **are** the ledger, `prop/{u}/index.json` **is** the fold |
+| 002 | Manifest | 1 | 003 (profile names) | SPEC-014 §bioc-manifest: `packages/<name>.yaml` |
+| 003 | Policy + profiles | 1 | — | SPEC-014 §bioc-manifest: `policy.yaml` |
+| 004 | Build workflows | 1 | 002, 003, 005, 009 | SPEC-014 §bioc-build: `build.yml` / `selftest.yml` |
+| 005 | Staging upload service | 1 | — | SPEC-014: GitHub Actions artifacts (`retention-days: 14`) — no presign Worker |
+| 006 | Publisher | 1 | 001, 002, 003, 005, 009 | SPEC-014 §bioc-registry: `publish.yml` cron + `POST /publish` |
+| 007 | Repo serving + BiocManager | 1 | 001 | SPEC-014: existing `bioc`/`bioc-release` universes, existing `/repo/{u}` |
+| 008 | Dispatcher + cron tier | 1 | 002, 009 | SPEC-014 §bioc-build: `dispatch.yml` |
+| 009 | Event plane | 1 (minimal) / 2 (full) | 001 (shares R2 conventions) | SPEC-014: `events.ndjson` inside the staged artifact — no ingest Worker |
+| 010 | r-universe ingest + mirror | 2 | 001, 006, 009 | — (phase 2; bioc-registry's `/poll` already runs the phase-1-relevant part, see below) |
+| 011 | Revdep check scheduler | 3 | 009, 004 (check harness) | — (phase 3) |
+| 012 | Agent triage | 3 | 009, 002 | — (phase 3) |
+| 013 | Push detection fast path | 2 (Layer 0 opt. 1) | 008, 009 | — (phase 2; SPEC-008's `ls-remote` polling covers phase 1) |
 
 ## What bioc-registry already provides
 
@@ -98,16 +98,37 @@ bioc-build-owned surface.
 
 ## Trust domains
 
-1. **Governance (human)**: manifest repo + policy repo. All changes via PR.
-2. **Build (untrusted)**: public build repo on GitHub-hosted runners. Can
-   write only to staging prefix via short-lived presigned URLs. Holds no
-   long-lived credentials.
-3. **Publish (trusted)**: publisher Worker/DO. Sole writer to published
-   prefixes and ledger. Verifies attestations against the manifest before any
-   promotion.
-4. **Observe (read-mostly)**: event ingest Worker (append-only writes to
-   archive prefix), catalog jobs, dashboards. No write access to published
-   repo state.
+**Phase 1 (SPEC-014, issue #18): there is no separate staging trust
+domain.** Staging is a GitHub Actions artifact of the untrusted build
+repo (`retention-days: 14`); verification (attestation + manifest) happens
+in the trusted repo's own CI (`bioc-registry`'s `publish.yml`) before
+promotion, not in a dedicated publisher service sitting between build and
+store. The domains below still hold as a model of *who can do what*; where
+phase 1 realizes a domain differently than the phase-2+ target, both are
+noted.
+
+1. **Governance (human)**: manifest repo (`bioc-manifest`) + policy file
+   (`policy.yaml`, in the same repo for phase 1 — SPEC-003). All changes
+   via PR.
+2. **Build (untrusted)**: public `bioc-build` repo on GitHub-hosted
+   runners. Phase 1: writes only its own run's GitHub Actions artifact —
+   no bucket credential or write path exists at all, staging or otherwise.
+   Phase-2 target: write only to a staging prefix via short-lived
+   presigned URLs (SPEC-005). Holds no long-lived credentials either way.
+3. **Publish (trusted)**: phase 1: `publish.yml`, a cron in the
+   `bioc-registry` repo (which already holds the R2 secrets) — not a
+   separate publisher Worker/DO. It downloads the build repo's staged
+   artifacts (`gh run download`), verifies attestation and manifest state,
+   and is the sole writer to `bioc-prop`'s published prefixes. Phase-2
+   target: publisher Worker/DO, sole writer to published prefixes and
+   ledger, verifying attestations against the manifest before promotion
+   (SPEC-006).
+4. **Observe (read-mostly)**: phase 1: no separate domain — no ingest
+   Worker exists (issue #4 cut); events travel inside the staged artifact
+   and are read alongside it during promotion. Phase-2 target: event
+   ingest Worker (append-only writes to archive prefix), catalog jobs,
+   dashboards (SPEC-009). No write access to published repo state either
+   way.
 5. **Agents (phase 3, untrusted)**: outputs limited to PRs, issues, and
    events. No staging or publish rights.
 
@@ -132,10 +153,16 @@ bioc-build-owned surface.
 
 ## Sequencing
 
-**Phase 1 (PoC)**: 003 → 001 → 005 → {002, 004, 006, 007} in parallel →
-008 → minimal 009 (ingest + raw archive only). Exit: PoC definition met for
-≥20 real experiment data packages and ≥5 workflow packages across release
-and devel streams.
+**Phase 1 (PoC)**: as originally planned, the build order below; as
+actually realized (SPEC-014, issue #18), most of it is reuse rather than
+new construction — `bioc-manifest` (002/003) → `bioc-build`'s
+`build.yml`/`selftest.yml` (004) → `dispatch.yml` (008) →
+`bioc-registry`'s existing `publish.yml` cron + `POST /publish`, which
+absorbs what 001/005/006/007/009 describe as separate components.
+Original from-scratch order: 003 → 001 → 005 → {002, 004, 006, 007} in
+parallel → 008 → minimal 009 (ingest + raw archive only). Exit: PoC
+definition met for ≥20 real experiment data packages and ≥5 workflow
+packages across release and devel streams.
 
 **Phase 2 (unification)**: full 009 (catalog, badges, dashboard), 010
 (r-universe ingest → unified fold → single user-facing repo), 013 (push
