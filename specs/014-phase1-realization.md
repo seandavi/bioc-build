@@ -22,6 +22,18 @@ artifact instead of `store-package`. No step depends on
 `https://bioconductor.org`; the version pair lives in bioc-manifest
 `versions.yaml`.
 
+Mechanically: `build.yml` starts as a **verbatim copy** of r-universe's
+reusable `build.yml` at a pinned upstream commit (first commit: zero diff),
+with every `uses:` pinned to that state; `scripts/upstream-diff.sh` shows
+the divergence at any time. Everything we need is then layered on as
+configuration read from `policy.yaml` / `versions.yaml`: which jobs run
+(linux only for data-experiment and workflows; windows/macos/wasm gated off,
+not deleted), size limits and timeouts, build and check steps, and our
+resolve + attest + staged-artifact path in place of `store-package`. The
+payoff is a direct comparison: a package both systems build should yield
+identical artifacts and check verdicts, checkable against the r-universe
+results bioc-registry already archives.
+
 ## The cuts, in one table
 
 | Spec said | Phase 1 does | Why |
