@@ -1,15 +1,18 @@
 name: dispatch
 
-# Cron + manual trigger that decides which (package, stream) pairs need a
+# Manual-trigger-only for now: decides which (package, stream) pairs need a
 # build and fans them out as a matrix of build.yml calls (issue #16,
 # SPEC-014 §dispatch.yml). Never touches secrets; job 1 only reads public
 # data (bioc-manifest, bioconductor.org, the bioc-registry state file).
+#
+# ponytail: the `schedule:` cron (every 6h, mode=changed) is deliberately
+# left out of this PR -- dispatching up to 200 never-attempted packages on a
+# timer before the bioc-registry publisher is deployed would just pile up
+# unconsumed artifacts. Add it back in the M5 PR once M4 (the publisher) is
+# proven. Note for when it returns: GitHub disables a repo's scheduled
+# workflows after 60 days with no *commits* to the repo -- a cron run itself
+# does not count as activity, so `schedule:` alone isn't self-sustaining.
 on:
-  schedule:
-    # every 6h. Also: GitHub disables cron in repos idle >60 days, so this
-    # cron is itself what keeps the repo "active" — no separate probe needed
-    # while dispatch.yml runs on this schedule.
-    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       mode:

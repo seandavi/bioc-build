@@ -44,9 +44,25 @@ extract_check_args() {
 check "$(extract_check_args data-experiment)" "--no-manual --no-build-vignettes" "check_args (trailing comment stripped)"
 check "$(extract_check_args workflows)" "--no-manual" "check_args (workflows profile)"
 
+# R CMD check's real "Status:" line ("OK" / "1 NOTE" / "2 WARNINGs" / ...)
+# must collapse to a single space-free word: it gets written verbatim into a
+# KEY=VALUE file that is later `source`d, and "CHECK_STATUS=1 note" runs
+# `note` as a command (this actually happened on ARRmData).
+classify_status() {
+  if echo "$1" | grep -qi ERROR; then echo error
+  elif echo "$1" | grep -qi WARNING; then echo warning
+  elif [ -n "$1" ]; then echo ok
+  else echo error; fi
+}
+check "$(classify_status 'Status: OK')" "ok" "check status: OK"
+check "$(classify_status 'Status: 1 NOTE')" "ok" "check status: 1 NOTE (no space in output)"
+check "$(classify_status 'Status: 2 WARNINGs')" "warning" "check status: WARNINGs"
+check "$(classify_status 'Status: 1 ERROR')" "error" "check status: ERROR"
+check "$(classify_status '')" "error" "check status: missing Status line"
+
 # --- staged.R: full success path and the all-null failure path -----------
 Rscript staged.R ok msdata 0.51.1 release msdata_0.51.1.tar.gz abc123 12345 \
-  https://git.bioconductor.org/packages/msdata RELEASE_3_23 deadbeef \
+  https://git.bioconductor.org/packages/msdata RELEASE_3_23 deadbeef 2026-08-30T12:00:00Z \
   manifestsha 2026.09.1 999 1 https://example.com/run \
   bioconductor/bioconductor_docker:RELEASE_3_23@sha256:xyz 4.6.1 \
   ok ok none "$TMP/staged_ok.json"
@@ -55,11 +71,13 @@ import json
 d = json.load(open('$TMP/staged_ok.json'))
 assert d['status'] == 'ok'
 assert d['tarball']['size_bytes'] == 12345
+assert d['tarball']['file'] == 'msdata_0.51.1.tar.gz', d['tarball']['file']  # bare filename, no './'
+assert d['source']['commit_time'] == '2026-08-30T12:00:00Z'
 assert d['build']['run_attempt'] == 1
-print('ok: staged.json success shape')
+print('ok: staged.json success shape (bare tarball filename, commit_time)')
 "
 Rscript staged.R "failed:resolve" nosuchpkg null release null null null \
-  null null null null null 999 1 https://example.com/run null null \
+  null null null null null null 999 1 https://example.com/run null null \
   null null none "$TMP/staged_fail.json"
 python3 -c "
 import json

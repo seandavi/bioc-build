@@ -52,7 +52,7 @@ write_staged() {
   Rscript "$SCRIPT_DIR/staged.R" \
     "$status" "$PACKAGE" "${VERSION:-null}" "$STREAM" \
     "${TARBALL_FILE:-null}" "${SHA256:-null}" "${SIZE_BYTES:-null}" \
-    "${GIT_URL:-null}" "$BRANCH" "${COMMIT:-null}" \
+    "${GIT_URL:-null}" "$BRANCH" "${COMMIT:-null}" "${COMMIT_TIME:-null}" \
     "${MANIFEST_COMMIT:-null}" "${POLICY_VERSION:-null}" \
     "$RUN_ID" "$RUN_ATTEMPT" "$RUN_URL" "$CONTAINER" "$R_VERSION" \
     "${CHECK_STATUS:-null}" "${BIOCCHECK_STATUS:-null}" \
@@ -92,7 +92,7 @@ monitor_disk() {
 # on failure it has already written staged.json itself via fail() above.
 pipeline() (
   VERSION=""; TARBALL_FILE=""; SHA256=""; SIZE_BYTES="null"
-  GIT_URL=""; COMMIT=""; MANIFEST_COMMIT=""; POLICY_VERSION=""
+  GIT_URL=""; COMMIT=""; COMMIT_TIME=""; MANIFEST_COMMIT=""; POLICY_VERSION=""
   CHECK_STATUS="null"; BIOCCHECK_STATUS="null"; DESC_PATH="none"
 
   # --- 1. resolve ------------------------------------------------------
@@ -128,6 +128,7 @@ pipeline() (
   git clone --depth 1 --branch "$BRANCH" "$GIT_URL" pkgsrc >"$LOGS/build.log" 2>&1 \
     || fail fetch "git clone $GIT_URL@$BRANCH failed"
   COMMIT=$(git -C pkgsrc rev-parse HEAD)
+  COMMIT_TIME=$(git -C pkgsrc log -1 --format=%cI)
   emit source_fetched commit="$COMMIT" branch="$BRANCH"
 
   # --- 3. deps -------------------------------------------------------------
@@ -138,7 +139,7 @@ pipeline() (
 
   # --- 4. build ------------------------------------------------------------
   R CMD build pkgsrc >"$LOGS/build.log" 2>&1 || fail build "R CMD build failed, see logs/build.log"
-  TARBALL_FILE=$(ls -1 ./*.tar.gz | head -1)
+  TARBALL_FILE=$(basename "$(ls -1 ./*.tar.gz | head -1)")   # bare filename: staged.json.tarball.file must not carry "./"
   VERSION=$(echo "$TARBALL_FILE" | sed -E "s/^${PACKAGE}_(.*)\.tar\.gz$/\1/")
   SHA256=$(sha256sum "$TARBALL_FILE" | awk '{print $1}')
   SIZE_BYTES=$(stat -c%s "$TARBALL_FILE")
@@ -150,8 +151,16 @@ pipeline() (
   CHECKDIR="${PACKAGE}.Rcheck"
   [ -f "$CHECKDIR/00check.log" ] && cp "$CHECKDIR/00check.log" "$LOGS/00check.log"
   [ -f "$CHECKDIR/00install.out" ] && cat "$CHECKDIR/00install.out" >> "$LOGS/00install.out"
-  CHECK_STATUS=$(grep -E '^Status:' "$LOGS/00check.log" 2>/dev/null | tail -1 | sed -E 's/^Status:[[:space:]]*//' | tr '[:upper:]' '[:lower:]')
-  [ -n "$CHECK_STATUS" ] || CHECK_STATUS="error"   # no Status line at all means check itself crashed
+  # R's actual "Status:" line is "OK" / "N NOTE(s)" / "N WARNING(s)" / "N ERROR(s)"
+  # (and combinations) -- collapse to SPEC-014's {ok,warning,error} by worst
+  # category. Must not leave a space in CHECK_STATUS: it's later written
+  # verbatim into a KEY=VALUE state file that gets `source`d (see $STATE
+  # below), and "CHECK_STATUS=1 note" would run `note` as a command.
+  RAW_STATUS=$(grep -E '^Status:' "$LOGS/00check.log" 2>/dev/null | tail -1)
+  if echo "$RAW_STATUS" | grep -qi ERROR; then CHECK_STATUS="error"
+  elif echo "$RAW_STATUS" | grep -qi WARNING; then CHECK_STATUS="warning"
+  elif [ -n "$RAW_STATUS" ]; then CHECK_STATUS="ok"   # covers "OK" and NOTE-only
+  else CHECK_STATUS="error"; fi   # no Status line at all means check itself crashed
 
   DESC_PATH="pkgsrc/DESCRIPTION"
   HAS_BIOCCHECK=$(Rscript -e 'cat(requireNamespace("BiocCheck", quietly=TRUE))')
@@ -168,6 +177,7 @@ pipeline() (
   {
     echo "VERSION=$VERSION"; echo "TARBALL_FILE=$TARBALL_FILE"; echo "SHA256=$SHA256"
     echo "SIZE_BYTES=$SIZE_BYTES"; echo "GIT_URL=$GIT_URL"; echo "COMMIT=$COMMIT"
+    echo "COMMIT_TIME=$COMMIT_TIME"
     echo "MANIFEST_COMMIT=$MANIFEST_COMMIT"; echo "POLICY_VERSION=$POLICY_VERSION"
     echo "CHECK_STATUS=$CHECK_STATUS"; echo "BIOCCHECK_STATUS=$BIOCCHECK_STATUS"
     echo "DESC_PATH=$DESC_PATH"

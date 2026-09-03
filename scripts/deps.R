@@ -14,15 +14,25 @@ parse_field <- function(field) {
   parts[nzchar(parts) & parts != "R"]
 }
 
+strong <- c("Depends", "Imports", "LinkingTo")
 desc <- read.dcf(desc_path)[1, ]
-direct <- unique(unlist(lapply(c("Depends", "Imports", "LinkingTo", "Suggests"),
-                                function(f) parse_field(desc[f]))))
+direct_strong <- unique(unlist(lapply(strong, function(f) parse_field(desc[f]))))
+direct_suggests <- parse_field(desc["Suggests"])
+direct <- unique(c(direct_strong, direct_suggests))
 
 ap <- available.packages()
 # remotes may not be installed; tools::package_dependencies over the
 # available.packages() db is enough to get the transitive closure.
+#
+# Suggests are taken one level deep only (recursed for their own *strong*
+# deps, so they're actually loadable, but not for their own Suggests).
+# Recursing Suggests at every depth (which="most") reaches unrelated,
+# sometimes-unbuildable optional packages several hops down -- e.g. Rcplex,
+# a commercial-solver binding, showed up this way under a mass-spec package
+# and broke the whole install. This matches Bioconductor's own build system,
+# which doesn't chase Suggests-of-Suggests either.
 closure <- unique(c(direct, unlist(tools::package_dependencies(
-  direct, db = ap, which = "most", recursive = TRUE
+  direct, db = ap, which = strong, recursive = TRUE
 ))))
 closure <- setdiff(closure, rownames(installed.packages()))
 closure <- closure[closure %in% rownames(ap)]  # drop anything not in a resolvable repo

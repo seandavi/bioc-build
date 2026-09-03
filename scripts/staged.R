@@ -15,17 +15,18 @@ size_bytes    <- suppressWarnings(as.numeric(g(7)))
 git_url       <- g(8)
 branch        <- g(9)
 commit        <- g(10)
-manifest_commit <- g(11)
-policy_version  <- g(12)
-run_id        <- a[13]
-run_attempt   <- suppressWarnings(as.integer(a[14]))
-run_url       <- a[15]
-container     <- g(16)
-r_version     <- g(17)
-check_status  <- g(18)
-bioccheck     <- g(19)
-desc_path     <- a[20]
-out_path      <- a[21]
+commit_time   <- g(11)
+manifest_commit <- g(12)
+policy_version  <- g(13)
+run_id        <- a[14]
+run_attempt   <- suppressWarnings(as.integer(a[15]))
+run_url       <- a[16]
+container     <- g(17)
+r_version     <- g(18)
+check_status  <- g(19)
+bioccheck     <- g(20)
+desc_path     <- a[21]
+out_path      <- a[22]
 
 null_or <- function(x) if (is.na(x)) NULL else jsonlite::unbox(x)
 
@@ -58,7 +59,8 @@ staged <- list(
   source = list(
     git_url = null_or(git_url),
     branch = null_or(branch),
-    commit = null_or(commit)
+    commit = null_or(commit),
+    commit_time = null_or(commit_time)
   ),
   manifest_commit = null_or(manifest_commit),
   policy_version = null_or(policy_version),
