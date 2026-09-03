@@ -89,7 +89,9 @@ assert d['description']['License'] is None
 print('ok: staged.json failure shape (all nulls, still valid)')
 "
 
-# --- deps.R: DESCRIPTION field parsing (missing fields must not error) ---
+# --- deps.R: DESCRIPTION field parsing (r-universe getdeps.R shape) -------
+# direct deps only, missing fields (LinkingTo/Enhances/VignetteBuilder here)
+# must not error, "R" and version constraints must be stripped.
 cat > "$TMP/DESCRIPTION" <<'EOF'
 Package: fakepkg
 Version: 1.0
@@ -98,16 +100,14 @@ Imports: jsonlite, stats
 Suggests: knitr
 EOF
 Rscript -e '
-desc <- read.dcf("'"$TMP"'/DESCRIPTION")[1,]
-parse_field <- function(field) {
-  if (is.na(field) || !nzchar(field)) return(character(0))
-  parts <- strsplit(field, ",")[[1]]
-  parts <- trimws(gsub("\\(.*\\)", "", parts))
-  parts[nzchar(parts) & parts != "R"]
-}
-direct <- unique(unlist(lapply(c("Depends","Imports","LinkingTo","Suggests"), function(f) parse_field(desc[f]))))
-stopifnot(setequal(direct, c("methods","jsonlite","stats","knitr")))
-cat("ok: deps.R field parsing (LinkingTo absent, no error)\n")
+desc <- as.data.frame(read.dcf("'"$TMP"'/DESCRIPTION"))
+fields <- c("Depends", "Imports", "LinkingTo", "Suggests", "Enhances", "VignetteBuilder")
+raw <- unlist(desc[intersect(fields, names(desc))])
+pkg_deps <- unique(trimws(sub("\\(.*\\)", "", unlist(strsplit(as.character(raw), ",")))))
+skiplist <- c("R", row.names(installed.packages(priority = "base")))
+pkg_deps <- setdiff(pkg_deps, skiplist)
+stopifnot(setequal(pkg_deps, c("jsonlite","knitr")))  # methods/stats are base packages, stripped
+cat("ok: deps.R field parsing (LinkingTo absent, no error, R/base stripped)\n")
 '
 
 # --- dispatch_matrix.py: single/backfill/changed decision rules ----------

@@ -1,6 +1,8 @@
 #!/usr/bin/env Rscript
-# Installs the DESCRIPTION dependency closure via install.packages(), then
-# appends one deps_resolved event line to the events file.
+# Installs the DESCRIPTION's direct dependencies via a single install.packages()
+# call, letting it resolve transitive hard deps itself -- same shape as
+# r-universe's getdeps.R (github.com/r-universe-org/actions/blob/HEAD/getdeps.R),
+# not a hand-rolled closure. Then appends one deps_resolved event line.
 # args: <DESCRIPTION path> <events.ndjson path> <package> <stream> <universe>
 #
 # No BiocManager here (never touches bioconductor.org, per repo policy):
@@ -18,49 +20,29 @@ options(repos = c(
   CRAN = paste0("https://p3m.dev/cran/__linux__/", codename, "/latest")
 ))
 
-parse_field <- function(field) {
-  if (is.na(field) || !nzchar(field)) return(character(0))
-  parts <- strsplit(field, ",")[[1]]
-  parts <- trimws(gsub("\\(.*\\)", "", parts))
-  parts[nzchar(parts) & parts != "R"]
-}
+desc <- as.data.frame(read.dcf(desc_path))
+fields <- c("Depends", "Imports", "LinkingTo", "Suggests", "Enhances", "VignetteBuilder")
+raw <- unlist(desc[intersect(fields, names(desc))])
+pkg_deps <- unique(trimws(sub("\\(.*\\)", "", unlist(strsplit(as.character(raw), ",")))))
+skiplist <- c("R", row.names(installed.packages(priority = "base")))
+pkg_deps <- setdiff(pkg_deps, skiplist)
 
-strong <- c("Depends", "Imports", "LinkingTo")
-desc <- read.dcf(desc_path)[1, ]
-direct_strong <- unique(unlist(lapply(strong, function(f) parse_field(desc[f]))))
-direct_suggests <- parse_field(desc["Suggests"])
-direct <- unique(c(direct_strong, direct_suggests))
+# BiocStyle/BiocCheck are ours to guarantee regardless of what DESCRIPTION
+# declares: BiocStyle in particular is routinely used straight in a
+# vignette's YAML header without ever being added to Suggests (rnaseqDTU
+# does exactly this) -- no DESCRIPTION-driven dependency list, r-universe's
+# included, would catch that.
+pkg_deps <- union(pkg_deps, c("BiocStyle", "BiocCheck"))
 
-ap <- available.packages()
-# Suggests are taken one level deep only (recursed for their own *strong*
-# deps, so they're actually loadable, but not for their own Suggests).
-# Recursing Suggests at every depth (which="most") reaches unrelated,
-# sometimes-unbuildable optional packages several hops down -- e.g. Rcplex,
-# a commercial-solver binding, showed up this way under a mass-spec package
-# and broke the whole install. This matches Bioconductor's own build system,
-# which doesn't chase Suggests-of-Suggests either.
-#
-# BiocStyle is added unconditionally: it's the de facto vignette-styling
-# package across Bioconductor, but plenty of packages (rnaseqDTU included)
-# use it in their .Rmd without declaring it in DESCRIPTION at all.
-closure <- unique(c(direct, "BiocStyle", "BiocCheck", unlist(tools::package_dependencies(
-  direct, db = ap, which = strong, recursive = TRUE
-))))
-closure <- setdiff(closure, rownames(installed.packages()))
-closure <- closure[closure %in% rownames(ap)]  # drop anything not in a resolvable repo
+if (length(pkg_deps)) install.packages(pkg_deps)
 
-if (length(closure)) {
-  install.packages(closure)
-}
-
-missing <- setdiff(closure, rownames(installed.packages()))
+missing <- setdiff(pkg_deps, rownames(installed.packages()))
 if (length(missing)) {
-  stop("failed to install: ", paste(missing, collapse = ", "))
+  stop("failed to install direct dependencies: ", paste(missing, collapse = ", "))
 }
 
 ip_all <- installed.packages()
-want <- intersect(union(direct, closure), rownames(ip_all))
-ip <- ip_all[want, c("Package", "Version"), drop = FALSE]
+ip <- ip_all[intersect(pkg_deps, rownames(ip_all)), c("Package", "Version"), drop = FALSE]
 payload <- list(
   ts = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
   event = "deps_resolved", package = pkg, stream = stream,

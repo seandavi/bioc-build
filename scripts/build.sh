@@ -101,8 +101,11 @@ pipeline() (
   emit build_started manifest_ref="$MANIFEST_REF"
   # top-level "sha" is the first "sha" key in the response (nested commit/parent
   # shas come later), so a plain grep is enough -- no need to spin up R for this.
-  MANIFEST_COMMIT=$(curl -fsSL "https://api.github.com/repos/seandavi/bioc-manifest/commits/$MANIFEST_REF" \
-    | grep -o '"sha": *"[a-f0-9]*"' | head -1 | sed -E 's/.*"([a-f0-9]+)"$/\1/') || true
+  # Capture curl's output into a variable first, then grep it: piping curl
+  # straight into `head -1` closes the pipe as soon as head is satisfied,
+  # which makes curl print a spurious "Failure writing output to destination".
+  COMMIT_API_RESPONSE=$(curl -fsSL "https://api.github.com/repos/seandavi/bioc-manifest/commits/$MANIFEST_REF") || true
+  MANIFEST_COMMIT=$(echo "$COMMIT_API_RESPONSE" | grep -o '"sha": *"[a-f0-9]*"' | head -1 | sed -E 's/.*"([a-f0-9]+)"$/\1/')
   [ -n "$MANIFEST_COMMIT" ] || fail resolve "could not resolve manifest_ref $MANIFEST_REF to a commit"
 
   PKG_YAML=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/$MANIFEST_COMMIT/packages/$PACKAGE.yaml") \
@@ -148,6 +151,10 @@ pipeline() (
   emit tarball_built sha256="$SHA256" size_bytes="$SIZE_BYTES"
 
   # --- 5. check --------------------------------------------------------
+  # An optional Suggests that fails to install for reasons outside this
+  # package's control (platform-specific, upstream flake) shouldn't fail the
+  # check by itself -- direct Suggests are already installed by deps.R above.
+  export _R_CHECK_FORCE_SUGGESTS_=FALSE
   # shellcheck disable=SC2086 (check_args is a deliberately unquoted word-split flag list)
   R CMD check $CHECK_ARGS "$TARBALL_FILE" >"$LOGS/check_stdout.log" 2>&1
   CHECKDIR="${PACKAGE}.Rcheck"
