@@ -25,7 +25,7 @@ on:
         description: Directory to find R package
         type: string
       nobinaries:
-        description: Skip build and check on Windows and MacOS
+        description: "Skip build and check on Windows, MacOS and Wasm (bioc-build divergence: also gates Wasm now)"
         type: string
       organization:
         description: Run extra organization specific checks
@@ -39,6 +39,30 @@ on:
         description: Max build time in minutes
         type: number
         default: 60
+      our_output:
+        description: >
+          bioc-build divergence: when set, gate off r-universe's
+          store-package/deploy steps and instead attest + write
+          staged.json/events.ndjson + upload-artifact (see README.md).
+          Empty/unset behaves exactly like upstream.
+        type: string
+        default: ''
+      source_size_limit_mb:
+        description: "bioc-build divergence: SOURCE_SIZE_LIMIT_MB for actions/build-source (see actions/build-source/UPSTREAM.md)"
+        type: number
+        default: 100
+      package_name:
+        description: "bioc-build divergence: our package identifier, for staged.json (r-universe learns this from the source build instead)"
+        type: string
+        default: ''
+      stream_name:
+        description: "bioc-build divergence: release|devel, for staged.json"
+        type: string
+        default: ''
+      linux_matrix:
+        description: "bioc-build divergence: policy.yaml's build.r_images as {r:[...],arch:[\"x86_64\"]} JSON, replaces upstream's devel+release matrix"
+        type: string
+        default: '{"r":["release"],"arch":["x86_64"]}'
     outputs:
       commitinfo:
         description: "Metadata from the commit"
@@ -88,12 +112,17 @@ jobs:
     steps:
       - name: Free disk space on runner
         run: rm -Rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" || true
+      # bioc-build divergence: actions/build-source is a local fork (see
+      # actions/build-source/UPSTREAM.md) so it needs our repo checked out;
+      # upstream's own uses: pulls a published image and needs no checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: build
         timeout-minutes: ${{ inputs.timeout }}
         name: Build source package and vignettes
-        uses: r-universe-org/build-source@1ee4788f93b7a9f2da882e757ceeff34759a7ab5 # master
+        uses: ./actions/build-source
         env:
           GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+          SOURCE_SIZE_LIMIT_MB: ${{ inputs.source_size_limit_mb }}
         with:
           url: ${{ inputs.repository }}
           ref: ${{ inputs.ref }}
@@ -102,7 +131,7 @@ jobs:
           articles: ${{ fromJSON(inputs.variables).registered }}
       - name: "Store source package"
         uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
-        if: ${{ !cancelled() && steps.build.outputs.PACKAGE }}
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE && !inputs.our_output }}
         id: artifact
         with:
           name: package-source
@@ -112,13 +141,42 @@ jobs:
           TARGET: ${{ steps.build.outputs.SOURCEPKG && 'source' || 'failure' }}
       - name: "Store linux binary package"
         uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
-        if: ${{ !cancelled() && steps.build.outputs.BINARYPKG && github.run_attempt == 1 }}
+        if: ${{ !cancelled() && steps.build.outputs.BINARYPKG && github.run_attempt == 1 && !inputs.our_output }}
         with:
           name: package-linux-release-x86_64
           JOB_STATUS: ${{ job.status }}
           DISTRO: ${{ steps.build.outputs.DISTRO }}
           FILE: ${{ steps.build.outputs.BINARYPKG }}
           TARGET: 'linux'
+      # bioc-build divergence: source build failed -- our own output path
+      # (staged.json/events with status failed:build) since store-package
+      # above is gated off. r-universe's own artifact-not-produced signal
+      # (no package-source artifact) is what our_output replaces.
+      - name: "bioc-build: stage failed:build"
+        if: ${{ !cancelled() && inputs.our_output && !steps.build.outputs.SOURCEPKG }}
+        run: |
+          mkdir -p logs
+          jq -n --arg pkg "${{ inputs.package_name }}" --arg stream "${{ inputs.stream_name }}" \
+            --arg run_id "${{ github.run_id }}" --arg run_attempt "${{ github.run_attempt }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{schema_version:"1",package:$pkg,version:null,stream:$stream,status:"failed:build",
+              tarball:{file:null,sha256:null,size_bytes:null},
+              source:{git_url:"${{ inputs.repository }}",branch:"${{ fromJSON(inputs.variables).branch }}",commit:"${{ inputs.ref }}",commit_time:null},
+              manifest_commit:"${{ fromJSON(inputs.variables).manifest_commit }}",policy_version:"${{ fromJSON(inputs.variables).policy_version }}",
+              build:{run_id:$run_id,run_attempt:($run_attempt|tonumber),run_url:$run_url,container:"ghcr.io/r-universe-org/build-source",r_version:null},
+              check:{status:null,bioccheck:null},
+              description:{Depends:null,Imports:null,Suggests:null,License:null,NeedsCompilation:null,Priority:null,LinkingTo:null,Enhances:null,OS_type:null},
+              meta:{Title:null,Description:null,URL:null,BugReports:null,Maintainer:null,Author:null,biocViews:null}}' > staged.json
+          echo '{"ts":"'"$(date -u +%FT%TZ)"'","event":"build_failed","package":"${{ inputs.package_name }}","stream":"${{ inputs.stream_name }}","stage":"build"}' > events.ndjson
+      - name: "bioc-build: upload failed:build artifact"
+        if: ${{ !cancelled() && inputs.our_output && !steps.build.outputs.SOURCEPKG }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staged-${{ inputs.package_name }}-${{ inputs.stream_name }}
+          path: |
+            staged.json
+            events.ndjson
+          retention-days: 14
       - id: matrix
         if: always()
         uses: r-universe-org/actions/build-matrix@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
@@ -137,7 +195,9 @@ jobs:
     name: R-${{ matrix.r }} for Linux ${{ needs.source.outputs.compiled && matrix.arch || '' }}
     strategy:
       fail-fast: false
-      matrix: ${{fromJson(needs.source.outputs.matrix).linux}}
+      # bioc-build divergence: our r_images input (policy-driven) replaces
+      # upstream's own devel+release matrix when our_output is set.
+      matrix: ${{ inputs.our_output && fromJson(inputs.linux_matrix) || fromJson(needs.source.outputs.matrix).linux }}
     container:
       image: ghcr.io/r-universe-org/base-image:${{ matrix.r }}
       volumes:
@@ -146,6 +206,15 @@ jobs:
       - name: "Prepare Linux system"
         timeout-minutes: 10
         uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      # bioc-build divergence: check out our repo (for scripts/staged.R and
+      # the repos override below) and point BioCsoft at bioc-registry
+      # instead of bioconductor.posit.co (base-image's own Rprofile.site
+      # default). See scripts/bioc-registry-repos.R for why BioCann/BioCexp
+      # are left alone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.our_output
+      - if: inputs.our_output
+        run: echo "R_PROFILE_USER=$GITHUB_WORKSPACE/scripts/bioc-registry-repos.R" >> "$GITHUB_ENV"
       - name: "Get dependences"
         id: deps
         uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
@@ -172,7 +241,7 @@ jobs:
       - name: "Store binaries"
         id: artifact
         uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
-        if: ${{ always() && steps.check.outputs.binarypkg }}
+        if: ${{ always() && steps.check.outputs.binarypkg && !inputs.our_output }}
         with:
           name: package-linux-${{ matrix.r }}-${{ matrix.arch }}
           overwrite: ${{ matrix.r == 'release' }}
@@ -184,10 +253,59 @@ jobs:
       - name: "${{'Conclude'}}: linux-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
         run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
         if: always()
+      # bioc-build divergence: attest + staged.json/events.ndjson +
+      # upload-artifact in place of r-universe's store-package/deploy.
+      # ponytail: staged.json.check.bioccheck stays null here (the
+      # `bioconductor` job runs as a sibling, not a dependency, and its
+      # per-matrix-instance output can't cross safely into a matrixed job);
+      # the bioc-checks artifact from that job still exists standalone.
+      # events.ndjson is one synthetic line, not the granular per-step
+      # stream the old bespoke pipeline emitted -- fine-grained instrumentation
+      # of r-universe's own actions is future work, not this PR.
+      - name: "bioc-build: attest tarball provenance"
+        if: ${{ !cancelled() && inputs.our_output && steps.check.outcome == 'success' && github.ref == 'refs/heads/main' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ needs.source.outputs.sourcepkg }}
+      - name: "bioc-build: stage"
+        if: ${{ !cancelled() && inputs.our_output }}
+        run: |
+          set -euo pipefail
+          case "${{ steps.check.outputs.checkstatus }}" in
+            FAILURE|ERROR) CHECK_STATUS=error ;;
+            WARNING) CHECK_STATUS=warning ;;
+            *) CHECK_STATUS=ok ;;
+          esac
+          SHA256=$(sha256sum "${{ needs.source.outputs.sourcepkg }}" | awk '{print $1}')
+          SIZE_BYTES=$(stat -c%s "${{ needs.source.outputs.sourcepkg }}")
+          [ "$CHECK_STATUS" = error ] && STATUS=error || STATUS="$CHECK_STATUS"
+          Rscript "$GITHUB_WORKSPACE/scripts/staged.R" \
+            "$STATUS" "${{ inputs.package_name }}" "${{ needs.source.outputs.version }}" "${{ inputs.stream_name }}" \
+            "${{ needs.source.outputs.sourcepkg }}" "$SHA256" "$SIZE_BYTES" \
+            "${{ inputs.repository }}" "${{ fromJSON(inputs.variables).branch }}" "${{ inputs.ref }}" "${{ fromJSON(inputs.variables).commit_time }}" \
+            "${{ fromJSON(inputs.variables).manifest_commit }}" "${{ fromJSON(inputs.variables).policy_version }}" \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "ghcr.io/r-universe-org/base-image:${{ matrix.r }}" "${{ steps.deps.outputs.rversion }}" \
+            "$CHECK_STATUS" null none staged.json
+          echo '{"ts":"'"$(date -u +%FT%TZ)"'","event":"check_completed","package":"${{ inputs.package_name }}","stream":"${{ inputs.stream_name }}","status":"'"$CHECK_STATUS"'"}' > events.ndjson
+      - name: "bioc-build: upload staged artifact"
+        if: ${{ !cancelled() && inputs.our_output }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staged-${{ inputs.package_name }}-${{ inputs.stream_name }}
+          path: |
+            ${{ needs.source.outputs.sourcepkg }}
+            staged.json
+            events.ndjson
+            *.Rcheck/00install.out
+            *.Rcheck/00check.log
+          retention-days: 14
+          if-no-files-found: warn
 
   windows:
     needs: [source]
-    if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
+    # bioc-build divergence: honor nobinaries here too (upstream only wires it into macos)
+    if: ${{ !cancelled() && !inputs.nobinaries && needs.source.outputs.sourcepkg }}
     runs-on: ${{matrix.arch=='arm64' && 'windows-11-arm' || 'windows-2025'}}
     timeout-minutes: 150
     name: R-${{ matrix.r }} for Windows ${{ needs.source.outputs.compiled && matrix.arch || '' }}
@@ -313,7 +431,8 @@ jobs:
 
   wasm:
     needs: [source]
-    if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
+    # bioc-build divergence: honor nobinaries here too (upstream only wires it into macos)
+    if: ${{ !cancelled() && !inputs.nobinaries && needs.source.outputs.sourcepkg }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     name: R-${{ matrix.r }} for Wasm
