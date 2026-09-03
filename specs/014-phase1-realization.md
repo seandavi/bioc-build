@@ -114,7 +114,7 @@ logs/00check.log  logs/00install.out  logs/bioccheck.log  logs/build.log
   "package": "msdata", "version": "0.51.1", "stream": "release",
   "status": "ok",                           // ok | warning | error | failed:<stage>
   "tarball": {"file": "msdata_0.51.1.tar.gz", "sha256": "…", "size_bytes": 0},
-  "source": {"git_url": "…", "branch": "RELEASE_3_23", "commit": "…"},
+  "source": {"git_url": "…", "branch": "RELEASE_3_23", "commit": "…", "commit_time": "2026-08-30T12:00:00Z"},
   "manifest_commit": "…", "policy_version": "2026.09.1",
   "build": {"run_id": "…", "run_attempt": 1, "run_url": "…", "container": "…@sha256:…", "r_version": "4.6.1"},
   "check": {"status": "ok", "bioccheck": "ok|warning|error|null"},
@@ -156,9 +156,11 @@ Changed = `git ls-remote <git_url> <branch>` head ≠
 `MAINT_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`
 (from GSM `cdsci-*`). Skips with a notice, exit 0, if they are unset.
 
-Per run of `build.yml` on `seandavi/bioc-build` (`gh run list --workflow
-build.yml --branch main --status completed`, newest 100) with artifacts
-named `staged-*` not yet in `attempts.json` (keyed by `run_id`):
+Per completed run on `main` of `seandavi/bioc-build` (newest 100, any
+workflow: a `dispatch.yml` matrix run holds its `build.yml` jobs' artifacts,
+a manual `build.yml` run holds its own; `selftest.yml` never uploads
+`staged-*`), per artifact named `staged-<package>-<stream>` where
+`attempts[package][stream].run_id != run_id`:
 
 1. `gh run download` the artifact; read `staged.json`.
 2. If a tarball is present: `sha256sum` must equal `staged.json.tarball.sha256`;
@@ -181,7 +183,7 @@ named `staged-*` not yet in `attempts.json` (keyed by `run_id`):
     "version": "0.51.1", "sha256": "…", "ts": "…",
     "bioccheck": "ok", "archs": ["linux"], "origin": "bioc-build",
     "artifacts": [{"os": "src", "r": "4.6", "sha256": "…", "file": "msdata_0.51.1.tar.gz"}],
-    "desc": {…}, "meta": {…, "commit": {"id": "…", "time": "…"}, "git_url": "…"}
+    "desc": {…}, "meta": {…, "commit": {"id": "…", "time": "<source.commit_time>"}, "git_url": "…"}
   },
   "attempt": {"commit": "…", "status": "ok", "run_url": "…", "ts": "…"}
 }
