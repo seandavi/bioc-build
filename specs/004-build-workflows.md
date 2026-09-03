@@ -34,7 +34,15 @@ fit; deviates only where profiles require.
    `source_ref` matches (defense in depth vs dispatcher bug). Emit
    `build_started`.
 2. **Fetch source** at `source_ref`; record `commit` sha. Fail →
-   `build_failed{stage: fetch}`.
+   `build_failed{stage: fetch}`. The git repo *contains* the data — verified:
+   ChIPXpressData's git.bioconductor.org clone is 7.5 GB, its tarball 3.2 GB.
+   `external_data_store.txt` (Bioconductor's convention for re-attaching
+   large data at build/install time from an external store) is
+   **informational only** here: cloning the repo already pulls that data
+   in, so the file doesn't reduce what this step fetches. The real
+   constraint is runner disk, not source size — tracked as bioc-build
+   issue #11 (envelope/disk decision: self-hosted runner? build-from-tarball
+   only? skip install-check for pure data?), not solved by this spec.
 3. **Dependency setup**: install deps from the *current unified repo*
    (SPEC-007 URL) + CRAN. Record resolved dependency versions as
    `deps_resolved` event (feeds phase-3 differential diagnosis).

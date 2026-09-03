@@ -81,7 +81,12 @@ any future upload surface (Nextflow telemetry, build-tracker). API:
 - OQ-5.1: Cloudflare API token scoping — can the Worker's R2 binding be
   restricted to the staging bucket only via separate bucket (per OQ-0.1)?
   Default: yes, separate bucket.
-- OQ-5.2: Non-GitHub upstreams (git.bioconductor.org-only packages, OQ-2.2)
-  still build in the central repo, so OIDC identity is unaffected — but
-  attestation `source` binding weakens. Document as accepted risk or
-  require GitHub mirrors for bioc-build backend.
+- ~~OQ-5.2: Non-GitHub upstreams.~~ Resolved: git.bioconductor.org is the
+  normative phase-1 source for every entry (SPEC-002, SPEC-014), not an
+  exception. It still builds in the central repo, so OIDC identity is
+  unaffected; the weaker attestation `source` binding (git.bioconductor.org
+  has no attestation mechanism of its own to cross-check against) is
+  **accepted as a risk** rather than requiring a GitHub mirror, because
+  git.bioconductor.org is Bioconductor's own canonical upstream, not a
+  third party (see SPEC-002 "Target architecture: publisher-facing
+  contract").

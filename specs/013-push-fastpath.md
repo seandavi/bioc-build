@@ -29,6 +29,14 @@ fast-path outage degrades latency only.
   catches pushes flowing through bioc-git (e.g. release branches).
 - May land in phase 1 if bioc-git server access is straightforward;
   otherwise phase 2 with the App.
+- Layer 0 is genuinely optional for phase-1 *correctness*: SPEC-008's
+  `git ls-remote <git_url> <ref>` polling is host-agnostic already and
+  covers git.bioconductor.org-only packages (the unmirrored 31, issue #3)
+  exactly as well as GitHub-hosted ones — there is no GitHub App path for
+  those packages regardless, so Layer 0 is their *only possible* latency
+  improvement, not their only correctness path. Skipping Layer 0 in phase 1
+  costs those packages nothing but polling latency (≤ 30 min, same as every
+  other package before Layer 1 adoption).
 
 ## Layer 1: GitHub App ("Bioconductor Builder")
 

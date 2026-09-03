@@ -36,7 +36,7 @@ defaults:
   runner_envelope:
     runner: ubuntu-24.04
     max_wall_minutes: 340          # under GH 360 ceiling with margin
-    max_disk_gb: 13
+    max_disk_gb: 13                # does not fit every package — see below
   staging_ttl_days: 14
 profiles:
   data-experiment:
@@ -82,6 +82,13 @@ overrides_schema:                  # what manifest per-package overrides may set
   disk high-water-mark and tarball size as events (SPEC-009) feeding the
   limit_flagged trend query. There is NO hard tarball size limit in policy —
   the envelope (disk/time) is the limit.
+- `max_disk_gb: 13` does not fit every package: ChIPXpressData's git clone
+  is 7.5 GB and its tarball is 3.2 GB — clone + build + install + check
+  will not fit in the default envelope on a standard GitHub-hosted runner
+  (~14 GB free). The fix is not `max_disk_gb` (that field describes the
+  envelope maintainers must fit in, not runner capacity); it is a runner
+  or workflow decision, tracked as bioc-build issue #11. See SPEC-004 for
+  what `external_data_store.txt` does and doesn't help with here.
 - `fail_on` values: `error | warning | never | warning_off` (run, record,
   never gate).
 - Workflow packages: BiocCheck advisory reflects current practice; revisit
