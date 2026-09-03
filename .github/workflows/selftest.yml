@@ -36,64 +36,48 @@ permissions:
   contents: read
 
 jobs:
-  selftest:
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.v.outputs.branch }}
+      tag: ${{ steps.v.outputs.tag }}
+      universe: ${{ steps.v.outputs.universe }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          versions=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/${{ inputs.manifest_ref }}/versions.yaml")
+          release=$(echo "$versions" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "${{ inputs.stream }}" = "release" ]; then
+            branch="RELEASE_$(echo "$release" | tr . _)"; tag="$branch"; universe="bioc-release"
+          else
+            branch="devel"; tag="devel"; universe="bioc"
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "universe=$universe" >> "$GITHUB_OUTPUT"
+
+  selftest:
+    needs: resolve
+    runs-on: ubuntu-latest
+    container:
+      image: bioconductor/bioconductor_docker:${{ needs.resolve.outputs.tag }}
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
-
-      - name: resolve stream -> branch/container tag
-        id: stream
-        run: |
-          set -euo pipefail
-          cfg=$(curl -fsSL https://bioconductor.org/config.yaml)
-          release=$(echo "$cfg" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "${{ inputs.stream }}" = "release" ]; then
-            branch="RELEASE_$(echo "$release" | tr . _)"
-            tag="$branch"
-          else
-            branch="devel"
-            tag="devel"
-          fi
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: work dir on /mnt
-        id: work
-        run: |
-          set -euo pipefail
-          work=/mnt/work
-          sudo mkdir -p "$work" && sudo chown "$USER:$USER" "$work"
-          mkdir -p "$work/scripts" "$work/logs"
-          cp scripts/build.sh scripts/deps.R scripts/staged.R "$work/scripts/"
-          echo "dir=$work" >> "$GITHUB_OUTPUT"
-
-      - name: pull container
-        id: image
-        run: |
-          image="bioconductor/bioconductor_docker:${{ steps.stream.outputs.tag }}"
-          docker pull "$image"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-
       - name: build (resolve, fetch, deps, build, check, size)
-        run: |
-          docker run --rm \
-            -v "${{ steps.work.outputs.dir }}:/work" -w /work \
-            -e PACKAGE="${{ inputs.package }}" \
-            -e STREAM="${{ inputs.stream }}" \
-            -e BRANCH="${{ steps.stream.outputs.branch }}" \
-            -e MANIFEST_REF="${{ inputs.manifest_ref }}" \
-            -e RUN_ID="${{ github.run_id }}" \
-            -e RUN_ATTEMPT="${{ github.run_attempt }}" \
-            -e RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            -e CONTAINER="${{ steps.image.outputs.image }}" \
-            "${{ steps.image.outputs.image }}" bash /work/scripts/build.sh
+        run: bash scripts/build.sh
+        env:
+          PACKAGE: ${{ inputs.package }}
+          STREAM: ${{ inputs.stream }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          UNIVERSE: ${{ needs.resolve.outputs.universe }}
+          MANIFEST_REF: ${{ inputs.manifest_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CONTAINER: bioconductor/bioconductor_docker:${{ needs.resolve.outputs.tag }}
 
       # no attest, no staged artifact (that's build.yml's job) -- logs only,
       # per SPEC-014.
@@ -102,6 +86,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: selftest-${{ inputs.package }}-${{ inputs.stream }}
-          path: ${{ steps.work.outputs.dir }}/logs/**
+          path: logs/**
           retention-days: 14
           if-no-files-found: warn

@@ -3,7 +3,9 @@ name: dispatch
 # Manual-trigger-only for now: decides which (package, stream) pairs need a
 # build and fans them out as a matrix of build.yml calls (issue #16,
 # SPEC-014 §dispatch.yml). Never touches secrets; job 1 only reads public
-# data (bioc-manifest, bioconductor.org, the bioc-registry state file).
+# data (bioc-manifest, the bioc-registry state file). No git.bioconductor.org
+# calls happen here either -- ls-remote against each package's own git_url
+# is upstream git, not bioconductor.org.
 #
 # ponytail: the `schedule:` cron (every 6h, mode=changed) is deliberately
 # left out of this PR -- dispatching up to 200 never-attempted packages on a
@@ -48,8 +50,7 @@ jobs:
       - name: resolve release branch
         id: rel
         run: |
-          cfg=$(curl -fsSL https://bioconductor.org/config.yaml)
-          release=$(echo "$cfg" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
+          release=$(grep '^release_version' manifest-checkout/versions.yaml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "branch=RELEASE_$(echo "$release" | tr . _)" >> "$GITHUB_OUTPUT"
 
       - name: compute matrix

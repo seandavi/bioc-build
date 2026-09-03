@@ -36,8 +36,44 @@ permissions:
   attestations: write
 
 jobs:
-  build:
+  # `container:` on the build job needs its image known before that job
+  # starts, and can't run shell itself -- so resolve it here first.
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.v.outputs.branch }}
+      tag: ${{ steps.v.outputs.tag }}
+      universe: ${{ steps.v.outputs.universe }}
+      container: ${{ steps.v.outputs.container }}
+    steps:
+      - id: v
+        run: |
+          set -euo pipefail
+          versions=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/${{ inputs.manifest_ref }}/versions.yaml")
+          release=$(echo "$versions" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "${{ inputs.stream }}" = "release" ]; then
+            branch="RELEASE_$(echo "$release" | tr . _)"; tag="$branch"; universe="bioc-release"
+          elif [ "${{ inputs.stream }}" = "devel" ]; then
+            branch="devel"; tag="devel"; universe="bioc"
+          else
+            echo "unknown stream '${{ inputs.stream }}'" >&2; exit 1
+          fi
+          # anonymous Docker Hub registry API for the image digest; falls
+          # back to the tag (ponytail: no retries) if this breaks.
+          token=$(curl -fsSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository:bioconductor/bioconductor_docker:pull" | grep -o '"token":"[^"]*"' | cut -d'"' -f4) || true
+          digest=$(curl -fsSL -I -H "Authorization: Bearer $token" -H "Accept: application/vnd.docker.distribution.manifest.v2+json" "https://registry-1.docker.io/v2/bioconductor/bioconductor_docker/manifests/$tag" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}') || true
+          container="bioconductor/bioconductor_docker:$tag"
+          [ -n "$digest" ] && container="bioconductor/bioconductor_docker@$digest"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "universe=$universe" >> "$GITHUB_OUTPUT"
+          echo "container=$container" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    container:
+      image: bioconductor/bioconductor_docker:${{ needs.resolve.outputs.tag }}
     # ponytail: static, not policy.max_wall_minutes (a reusable/called workflow
     # can't take a dynamic value into timeout-minutes); 340 matches the
     # policy default. Revisit if a profile ever needs a longer budget.
@@ -45,76 +81,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # SPEC-004/010: free disk before anything else; ubuntu-latest has ~14GB
-      # free, these removals recover ~25GB more.
-      - name: free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
-
-      - name: resolve stream -> branch/container tag
-        id: stream
-        run: |
-          set -euo pipefail
-          cfg=$(curl -fsSL https://bioconductor.org/config.yaml)
-          release=$(echo "$cfg" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
-          devel=$(echo "$cfg" | grep '^devel_version' | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "${{ inputs.stream }}" = "release" ]; then
-            branch="RELEASE_$(echo "$release" | tr . _)"
-            tag="$branch"
-          elif [ "${{ inputs.stream }}" = "devel" ]; then
-            branch="devel"
-            tag="devel"
-          else
-            echo "unknown stream '${{ inputs.stream }}'" >&2
-            exit 1
-          fi
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: work dir on /mnt (more free space than the root disk)
-        id: work
-        run: |
-          set -euo pipefail
-          work=/mnt/work
-          sudo mkdir -p "$work" && sudo chown "$USER:$USER" "$work"
-          mkdir -p "$work/scripts" "$work/logs"
-          cp scripts/build.sh scripts/deps.R scripts/staged.R "$work/scripts/"
-          echo "dir=$work" >> "$GITHUB_OUTPUT"
-
-      - name: pull container, record digest
-        id: image
-        run: |
-          set -euo pipefail
-          image="bioconductor/bioconductor_docker:${{ steps.stream.outputs.tag }}"
-          docker pull "$image"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
       # scripts/build.sh is steps 1-6 (resolve/fetch/deps/build/check/size);
       # it writes staged.json + events.ndjson + logs/ and the disk envelope
       # monitor (issue #10) lives inside it so selftest.yml gets it for free.
+      # ubuntu-latest has plenty of free disk (~105G), so no free-disk-space
+      # step or separate /mnt work dir -- the checkout dir is fine.
       - name: build (resolve, fetch, deps, build, check, size)
-        run: |
-          docker run --rm \
-            -v "${{ steps.work.outputs.dir }}:/work" -w /work \
-            -e PACKAGE="${{ inputs.package }}" \
-            -e STREAM="${{ inputs.stream }}" \
-            -e BRANCH="${{ steps.stream.outputs.branch }}" \
-            -e MANIFEST_REF="${{ inputs.manifest_ref }}" \
-            -e RUN_ID="${{ github.run_id }}" \
-            -e RUN_ATTEMPT="${{ github.run_attempt }}" \
-            -e RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            -e CONTAINER="${{ steps.image.outputs.digest }}" \
-            "${{ steps.image.outputs.image }}" bash /work/scripts/build.sh
+        run: bash scripts/build.sh
+        env:
+          PACKAGE: ${{ inputs.package }}
+          STREAM: ${{ inputs.stream }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          UNIVERSE: ${{ needs.resolve.outputs.universe }}
+          MANIFEST_REF: ${{ inputs.manifest_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CONTAINER: ${{ needs.resolve.outputs.container }}
 
       - name: attest tarball provenance
         if: success() && github.ref == 'refs/heads/main'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: ${{ steps.work.outputs.dir }}/*.tar.gz
+          subject-path: ./*.tar.gz
 
       # if: always() — a failed build still stages staged.json + logs +
       # events so the dispatcher/publisher learn the attempt happened.
@@ -124,9 +113,9 @@ jobs:
         with:
           name: staged-${{ inputs.package }}-${{ inputs.stream }}
           path: |
-            ${{ steps.work.outputs.dir }}/*.tar.gz
-            ${{ steps.work.outputs.dir }}/staged.json
-            ${{ steps.work.outputs.dir }}/events.ndjson
-            ${{ steps.work.outputs.dir }}/logs/**
+            ./*.tar.gz
+            staged.json
+            events.ndjson
+            logs/**
           retention-days: 14
           if-no-files-found: warn

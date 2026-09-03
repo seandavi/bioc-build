@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# Runs entirely inside the stream's bioconductor_docker container, against a
-# bind-mounted /work. This one script IS steps 1-6 (resolve, fetch, deps,
-# build, check, size) for both build.yml (host adds attest+stage) and
-# selftest.yml (host just uploads logs). Runnable on a laptop with docker:
+# Runs entirely inside the stream's bioconductor_docker container. This one
+# script IS steps 1-6 (resolve, fetch, deps, build, check, size) for both
+# build.yml (host adds attest+stage) and selftest.yml (host just uploads
+# logs); in CI the container comes from the job's `container:` key, but
+# it's the same script either way. Runnable on a laptop with docker:
 #   docker run --rm -v "$PWD/work:/work" -w /work \
 #     -e PACKAGE=msdata -e STREAM=release -e BRANCH=RELEASE_3_23 \
-#     -e MANIFEST_REF=main -e RUN_ID=local -e RUN_ATTEMPT=1 -e RUN_URL=local \
+#     -e UNIVERSE=bioc-release -e MANIFEST_REF=main \
+#     -e RUN_ID=local -e RUN_ATTEMPT=1 -e RUN_URL=local \
 #     -e CONTAINER=bioconductor/bioconductor_docker:RELEASE_3_23 \
 #     bioconductor/bioconductor_docker:RELEASE_3_23 bash /work/scripts/build.sh
 #
 # All inputs are env vars so build.yml, selftest.yml and a human all call it
-# the same way. Writes /work/staged.json, /work/events.ndjson, /work/logs/*,
-# and on success /work/<pkg>_<ver>.tar.gz.
+# the same way. Writes staged.json, events.ndjson, logs/* under the current
+# directory, and on success <pkg>_<ver>.tar.gz alongside them.
 set -uo pipefail
 
-: "${PACKAGE:?}" "${STREAM:?}" "${BRANCH:?}" "${MANIFEST_REF:=main}"
+: "${PACKAGE:?}" "${STREAM:?}" "${BRANCH:?}" "${UNIVERSE:?}" "${MANIFEST_REF:=main}"
 : "${RUN_ID:=local}" "${RUN_ATTEMPT:=1}" "${RUN_URL:=local}"
 : "${CONTAINER:=unknown}"
 WORK=$(pwd)
@@ -134,7 +136,7 @@ pipeline() (
   # --- 3. deps -------------------------------------------------------------
   # installs the transitive dependency closure and appends the deps_resolved
   # event itself (it already has the closure in hand; no need to recompute).
-  Rscript "$SCRIPT_DIR/deps.R" pkgsrc/DESCRIPTION "$EVENTS" "$PACKAGE" "$STREAM" >"$LOGS/00install.out" 2>&1 \
+  Rscript "$SCRIPT_DIR/deps.R" pkgsrc/DESCRIPTION "$EVENTS" "$PACKAGE" "$STREAM" "$UNIVERSE" >"$LOGS/00install.out" 2>&1 \
     || fail deps "dependency install failed, see logs/00install.out"
 
   # --- 4. build ------------------------------------------------------------
@@ -163,10 +165,7 @@ pipeline() (
   else CHECK_STATUS="error"; fi   # no Status line at all means check itself crashed
 
   DESC_PATH="pkgsrc/DESCRIPTION"
-  HAS_BIOCCHECK=$(Rscript -e 'cat(requireNamespace("BiocCheck", quietly=TRUE))')
-  if [ "$HAS_BIOCCHECK" != "TRUE" ]; then
-    Rscript -e 'options(repos=BiocManager::repositories()); BiocManager::install("BiocCheck", update=FALSE, ask=FALSE)' >>"$LOGS/00install.out" 2>&1
-  fi
+  # BiocCheck is guaranteed installed by deps.R already.
   Rscript -e 'BiocCheck::BiocCheck(commandArgs(TRUE)[1])' "$TARBALL_FILE" >"$LOGS/bioccheck.log" 2>&1
   if grep -qi '^\* ERROR' "$LOGS/bioccheck.log"; then BIOCCHECK_STATUS="error"
   elif grep -qi '^\* WARNING' "$LOGS/bioccheck.log"; then BIOCCHECK_STATUS="warning"

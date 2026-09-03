@@ -43,16 +43,21 @@ git clone https://github.com/seandavi/bioc-build && cd bioc-build
 mkdir -p work/scripts work/logs
 cp scripts/*.R scripts/build.sh work/scripts/
 docker run --rm -v "$PWD/work:/work" -w /work \
-  -e PACKAGE=msdata -e STREAM=release -e BRANCH=RELEASE_3_23 -e MANIFEST_REF=main \
-  -e RUN_ID=local -e RUN_ATTEMPT=1 -e RUN_URL=local \
+  -e PACKAGE=msdata -e STREAM=release -e BRANCH=RELEASE_3_23 -e UNIVERSE=bioc-release \
+  -e MANIFEST_REF=main -e RUN_ID=local -e RUN_ATTEMPT=1 -e RUN_URL=local \
   -e CONTAINER=bioconductor/bioconductor_docker:RELEASE_3_23 \
   bioconductor/bioconductor_docker:RELEASE_3_23 bash /work/scripts/build.sh
 ```
 
-`STREAM=release` needs `BRANCH=RELEASE_3_23` (the current release branch,
-from https://bioconductor.org/config.yaml); `STREAM=devel` needs
-`BRANCH=devel` with the same-tagged container. Output lands in `work/`:
-`staged.json`, `events.ndjson`, `logs/`, and the tarball on success.
+`STREAM=release` needs `BRANCH=RELEASE_3_23` and `UNIVERSE=bioc-release` (the
+current release version, from `versions.yaml` at the root of
+[seandavi/bioc-manifest](https://github.com/seandavi/bioc-manifest));
+`STREAM=devel` needs `BRANCH=devel` and `UNIVERSE=bioc` with the
+same-tagged container. Output lands in `work/`: `staged.json`,
+`events.ndjson`, `logs/`, and the tarball on success. In CI, build.yml and
+selftest.yml run this same script directly inside the container via GitHub
+Actions' `container:` job key rather than `docker run` — only the local/manual
+invocation needs the wrapper.
 
 ## Trust model
 
