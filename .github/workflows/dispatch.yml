@@ -1,0 +1,87 @@
+name: dispatch
+
+# Manual-trigger-only for now: decides which (package, stream) pairs need a
+# build and fans them out as a matrix of build.yml calls (issue #16,
+# SPEC-014 §dispatch.yml). Never touches secrets; job 1 only reads public
+# data (bioc-manifest, bioconductor.org, the bioc-registry state file).
+#
+# ponytail: the `schedule:` cron (every 6h, mode=changed) is deliberately
+# left out of this PR -- dispatching up to 200 never-attempted packages on a
+# timer before the bioc-registry publisher is deployed would just pile up
+# unconsumed artifacts. Add it back in the M5 PR once M4 (the publisher) is
+# proven. Note for when it returns: GitHub disables a repo's scheduled
+# workflows after 60 days with no *commits* to the repo -- a cron run itself
+# does not count as activity, so `schedule:` alone isn't self-sustaining.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [changed, backfill, single]
+        default: changed
+      packages:
+        description: "comma-separated package names (required for mode=single, optional filter otherwise)"
+        type: string
+        required: false
+        default: ""
+      stream:
+        description: "release | devel (required for mode=single, optional filter otherwise)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  compute-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      count: ${{ steps.matrix.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: clone bioc-manifest
+        run: git clone --depth 1 https://github.com/seandavi/bioc-manifest.git manifest-checkout
+
+      - name: resolve release branch
+        id: rel
+        run: |
+          cfg=$(curl -fsSL https://bioconductor.org/config.yaml)
+          release=$(echo "$cfg" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "branch=RELEASE_$(echo "$release" | tr . _)" >> "$GITHUB_OUTPUT"
+
+      - name: compute matrix
+        id: matrix
+        env:
+          MODE: ${{ inputs.mode || 'changed' }}
+          PACKAGES: ${{ inputs.packages }}
+          STREAM: ${{ inputs.stream }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "single" ] && { [ -z "$PACKAGES" ] || [ -z "$STREAM" ]; }; then
+            echo "mode=single requires both packages (one name) and stream" >&2
+            exit 1
+          fi
+          python3 scripts/dispatch_matrix.py manifest-checkout "$MODE" "$PACKAGES" "$STREAM" \
+            "${{ steps.rel.outputs.branch }}" \
+            "https://bioc-registry.seandavi.workers.dev/data/state/bioc-build/attempts.json"
+
+  build:
+    needs: compute-matrix
+    # a matrix with 0 entries would otherwise report a vacuous green run; skip it explicitly.
+    if: needs.compute-matrix.outputs.count != '0'
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.compute-matrix.outputs.matrix) }}
+      max-parallel: 8
+      fail-fast: false
+    uses: ./.github/workflows/build.yml
+    with:
+      package: ${{ matrix.package }}
+      stream: ${{ matrix.stream }}
