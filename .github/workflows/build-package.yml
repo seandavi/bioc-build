@@ -44,6 +44,7 @@ jobs:
       git_url: ${{ steps.v.outputs.git_url }}
       commit: ${{ steps.v.outputs.commit }}
       timeout: ${{ steps.v.outputs.timeout }}
+      source_size_limit_mb: ${{ steps.v.outputs.source_size_limit_mb }}
       variables: ${{ steps.v.outputs.variables }}
     steps:
       - id: v
@@ -100,10 +101,14 @@ jobs:
 
           # ponytail: policy.yaml doesn't have a per-profile `build:` block
           # yet (proposed separately against bioc-manifest); once it does,
-          # thread r_images/source_size_limit_mb here too. For now
-          # build.yml's own defaults (release only, 100MB) apply.
+          # thread r_images here too. For now build.yml's own default
+          # (release only) applies. Both knobs below read `defaults:` only;
+          # absent → upstream r-universe's values (340 min is ours, 100MB
+          # is their hardcoded cap).
           timeout=$(echo "$policy_yaml" | grep '^defaults:' | grep -o 'max_wall_minutes: *[0-9]*' | grep -o '[0-9]*')
           [ -n "$timeout" ] || timeout=340
+          source_size_limit_mb=$(echo "$policy_yaml" | grep '^defaults:' | grep -o 'source_size_limit_mb: *[0-9]*' | grep -o '[0-9]*')
+          [ -n "$source_size_limit_mb" ] || source_size_limit_mb=100
 
           commit=$(git ls-remote "$git_url" "$branch" | awk '{print $1}')
           [ -n "$commit" ] || { fail fetch "git ls-remote $git_url $branch returned nothing"; exit 0; }
@@ -124,6 +129,7 @@ jobs:
           echo "git_url=$git_url" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
+          echo "source_size_limit_mb=$source_size_limit_mb" >> "$GITHUB_OUTPUT"
           echo "variables=$variables" >> "$GITHUB_OUTPUT"
       - name: upload failed:resolve artifact
         if: ${{ !cancelled() && steps.v.outputs.ok != 'true' }}
@@ -154,6 +160,7 @@ jobs:
       # reject a bare string there silently (no job, no annotation, the
       # whole run just fails) -- fromJson() coerces it back to a number.
       timeout: ${{ fromJson(needs.resolve.outputs.timeout) }}
+      source_size_limit_mb: ${{ fromJson(needs.resolve.outputs.source_size_limit_mb) }}
       variables: ${{ needs.resolve.outputs.variables }}
       our_output: "true"
       package_name: ${{ inputs.package }}
