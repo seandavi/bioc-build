@@ -277,16 +277,16 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ needs.source.outputs.sourcepkg }}
-      # bioccheck comes from the sibling `bioconductor` job's artifact (see
-      # needs: above) -- BiocCheck's own console markers ("* ERROR"/"*
-      # WARNING") are the same ones the old bespoke pipeline parsed.
+      # bioccheck verdict comes from the sibling `bioconductor` job's
+      # checkstatus output (see needs: above); its artifact is only kept
+      # as logs/bioccheck.log.
       - name: "bioc-build: get bioc-checks artifact"
         if: ${{ !cancelled() && inputs.our_output }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true # bioconductor job may itself have failed to produce it
         with:
           name: bioc-checks
-          path: .
+          path: bioccheck
       - name: "bioc-build: stage"
         if: ${{ !cancelled() && inputs.our_output }}
         run: |
@@ -303,14 +303,16 @@ jobs:
           [ -f "${{ inputs.package_name }}.Rcheck/00check.log" ] && cp "${{ inputs.package_name }}.Rcheck/00check.log" logs/00check.log
           [ -f "${{ inputs.package_name }}.Rcheck/00install.out" ] && cp "${{ inputs.package_name }}.Rcheck/00install.out" logs/00install.out
           [ -f install.log ] && cp install.log logs/build.log
-          BIOCCHECK_FILE="${{ inputs.package_name }}.BiocCheck"
-          BIOCCHECK_STATUS=null
-          if [ -f "$BIOCCHECK_FILE" ]; then
-            cp "$BIOCCHECK_FILE" logs/bioccheck.log
-            if grep -qi '^\* ERROR' "$BIOCCHECK_FILE"; then BIOCCHECK_STATUS=error
-            elif grep -qi '^\* WARNING' "$BIOCCHECK_FILE"; then BIOCCHECK_STATUS=warning
-            else BIOCCHECK_STATUS=ok; fi
-          fi
+          # The artifact is the <pkg>.BiocCheck *directory* (output.log,
+          # 00BiocCheck.log); the verdict comes from bioc-check's own
+          # CHECKSTATUS (FAILURE|ERROR|WARNING|NOTE|OK), not log parsing.
+          [ -f bioccheck/output.log ] && cp bioccheck/output.log logs/bioccheck.log
+          case "${{ needs.bioconductor.outputs.checkstatus }}" in
+            FAILURE|ERROR) BIOCCHECK_STATUS=error ;;
+            WARNING) BIOCCHECK_STATUS=warning ;;
+            NOTE|OK) BIOCCHECK_STATUS=ok ;;
+            *) BIOCCHECK_STATUS=null ;;
+          esac
 
           # DESCRIPTION isn't checked out anywhere in this job (only the
           # tarball is) -- pull it straight out of the source tarball for
@@ -532,6 +534,8 @@ jobs:
       image: ghcr.io/r-universe-org/base-image:release
     outputs:
       checkresults: ${{ steps.check.outputs.checkresults }}
+      # bioc-build divergence: consumed by the linux job's stage step.
+      checkstatus: ${{ steps.check.outputs.checkstatus }}
     steps:
       - name: "Prepare Linux system"
         timeout-minutes: 10
