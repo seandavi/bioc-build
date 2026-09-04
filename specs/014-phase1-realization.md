@@ -194,12 +194,10 @@ a manual `build.yml` run holds its own; `selftest.yml` never uploads
 1. `gh run download` the artifact; read `staged.json`.
 2. If a tarball is present: `sha256sum` must equal `staged.json.tarball.sha256`;
    `gh attestation verify <tarball> --repo seandavi/bioc-build --signer-workflow seandavi/bioc-build/.github/workflows/build.yml` must pass.
-3. Manifest checks at `manifest_commit` (raw.githubusercontent.com):
-   file exists, `state: active`, `git_url` == staged `source.git_url`,
-   stream ∈ `streams`, `component` matches.
-4. Version gate: strict bump over the current index entry (if any) unless
-   the current entry has `origin: bioconductor` and equal version (replacing
-   a seeded entry with the same version is allowed once).
+3. (moved into the route — bioc-infrastructure ADR 0011: one gate for both
+   producers. The publisher does integrity only; steps 3–4 below are the
+   route's `manifest-*` and `version-gate` rules.)
+4. (as above)
 5. `aws s3 cp --endpoint-url https://<account>.r2.cloudflarestorage.com tarball s3://bioc-prop/prop/<universe>/cas/<sha256>` (skip if exists).
    Logs: `s3://bioc-prop/logs/bioc-build/<run_id>/…` (write-once).
 6. `POST https://bioc-registry.seandavi.workers.dev/publish` with
@@ -214,18 +212,34 @@ a manual `build.yml` run holds its own; `selftest.yml` never uploads
     "artifacts": [{"os": "src", "r": "4.6", "sha256": "…", "file": "msdata_0.51.1.tar.gz"}],
     "desc": {…}, "meta": {…, "commit": {"id": "…", "time": "<source.commit_time>"}, "git_url": "…"}
   },
+  "staged": <staged.json verbatim>,
   "attempt": {"commit": "…", "status": "ok", "run_url": "…", "ts": "…"}
 }
 ```
 
-   For a failed or rejected run, `entry` is omitted and `attempt.status` is
-   `failed:<stage>` or `rejected:<check>`.
+   For a failed build or an integrity rejection, `entry` is omitted and
+   `attempt.status` is `failed:<stage>` or `rejected:<check>` with
+   `check ∈ {no-tarball, sha256-mismatch, attestation}`. Everything else
+   that can say no lives in the route: it runs the consolidated gate
+   (`gate()` in bioc-registry `src/repo.ts`, ADR 0011) over `staged` +
+   `entry` — build-status, families (the linux check on the R the policy's
+   image ships), bioccheck (advisory), version-parse, version-gate (strict
+   bump; a `bioconductor`-seeded entry may be replaced at the same version
+   once), manifest-state / -git-url / -stream / -component at
+   `manifest_commit`, and deps (every hard dependency the registry publishes
+   is present at an acceptable version) — records
+   `attempt.status = rejected:<rule>` itself, and answers
+   `{"propagate": false, "decision": {"reasons": [...]}}`. The same function
+   is what r-universe builds pass through, and `POST /gate` exposes it
+   read-only.
 
 The route (additive, in `src/index.ts`; pure helpers in `src/repo.ts` with
 tests):
 
 - guarded by `x-maint-key` like `/poll`;
-- verifies `prop/<u>/cas/<sha256>` exists when `entry` is given;
+- verifies `prop/<u>/cas/<sha256>` exists when `entry` is given, then gates
+  (above); an `entry` without `staged` is accepted only as a byte-identical
+  re-POST of the record already in `published.json` (the self-heal path);
 - writes `prop/<u>/log/<ts>-<pkg>_<ver>.json` (the record, write-once);
 - upserts `prop/<u>/index.json` (read → set → put); a later r-universe
   read-modify-write can clobber it, so `publish.yml` re-POSTs every entry in
