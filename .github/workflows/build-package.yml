@@ -48,6 +48,12 @@ jobs:
       variables: ${{ steps.v.outputs.variables }}
     steps:
       - id: v
+        # `bash {0}`, not the default `bash -e {0}`: this script handles every
+        # failure itself (fail(); exit 0, so the failed:resolve artifact gets
+        # uploaded) and its `$(... | grep ...)` lookups legitimately match
+        # nothing. Under -e a no-match grep aborted the step before fail()
+        # ran (run 33856378389, rnaseqDTU).
+        shell: bash {0}
         run: |
           set -uo pipefail
           # ponytail: staged.json here is the minimal all-null failure shape
@@ -72,8 +78,14 @@ jobs:
           }
           yaml_get() { echo "$1" | grep -E "^$2:" | head -1 | sed -E "s/^$2:[[:space:]]*//; s/^\"(.*)\"\$/\1/"; }
 
-          manifest_api=$(curl -fsSL "https://api.github.com/repos/seandavi/bioc-manifest/commits/${{ inputs.manifest_ref }}") || true
-          manifest_commit=$(echo "$manifest_api" | grep -o '"sha": *"[a-f0-9]*"' | head -1 | sed -E 's/.*"([a-f0-9]+)"$/\1/')
+          # git ls-remote, not api.github.com: unauthenticated API calls share
+          # the runner IP's 60/hr budget and 403 under load (same run as above).
+          manifest_ref="${{ inputs.manifest_ref }}"
+          if echo "$manifest_ref" | grep -qE '^[0-9a-f]{40}$'; then
+            manifest_commit="$manifest_ref"
+          else
+            manifest_commit=$(git ls-remote https://github.com/seandavi/bioc-manifest.git "refs/heads/$manifest_ref" "refs/tags/$manifest_ref" | head -1 | awk '{print $1}')
+          fi
           if [ -z "$manifest_commit" ]; then fail resolve "could not resolve manifest_ref ${{ inputs.manifest_ref }}"; exit 0; fi
 
           pkg_yaml=$(curl -fsSL "https://raw.githubusercontent.com/seandavi/bioc-manifest/$manifest_commit/packages/${{ inputs.package }}.yaml") \
