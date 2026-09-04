@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+   <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+      <meta name="generator" content="r-universe/pandoc">
+      $if(author)$<meta name="author" content="$author-meta$">$endif$
+      $if(description)$<meta name="description" content="$description-meta$">$endif$
+      $if(pagetitle)$<title>$pagetitle$</title>$endif$
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.6.0/css/bootstrap.min.css" data-external="1">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css" data-external="1">
+      <link rel="stylesheet" href="https://r-universe.dev/static/article-styles.css?nocache=1" data-external="1">
+   </head>
+   <body>
+      <div class="container" id="topcontainer">
+         <script>if (window.self != window.top) try {document.getElementById('topcontainer').className = "container-fluid article-in-iframe"; } catch(e) {}</script>
+
+         <div class="frontmatter">
+         $if(title)$<h1 class="title">$title$</h1>$endif$
+         </div>
+
+         $if(toc)$
+         <div class="row">
+            <div class="col-xl-10">$body$</div>
+            <div class="d-none d-xl-block col-xl-2 bd-toc">
+               <ul class="section-nav">
+                  <li class="toc-entry">$toc$</li>
+               </ul>
+            </div>
+         </div>
+         $else$$body$$endif$
+      </div>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.slim.js" data-external="1"></script>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.6.0/js/bootstrap.min.js" data-external="1"></script>
+      <script src="https://r-universe.dev/static/article.js" data-external="1"></script>
+
+      <!-- Mathjax -->
+      <!-- <script src="https://polyfill.io/v3/polyfill.min.js?features=es6" data-external="1"></script> -->
+      <script id="MathJax-script" async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/4.0.0/tex-mml-chtml.min.js" data-external="1"></script>
+   </body>
+</html>

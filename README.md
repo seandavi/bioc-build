@@ -15,44 +15,61 @@ map of components and the decisions behind them live in
 ## Status
 
 Phase 1 (see [`specs/014-phase1-realization.md`](specs/014-phase1-realization.md)).
-`build.yml`, `selftest.yml` and `dispatch.yml` are live. The component specs
-are in [`specs/`](specs/), starting with [`000-overview.md`](specs/000-overview.md).
+`build.yml` (the r-universe engine), `build-package.yml` (our resolve +
+call entry point) and `dispatch.yml` are live. The component specs are in
+[`specs/`](specs/), starting with [`000-overview.md`](specs/000-overview.md).
 
-## Reproducing a build locally (`selftest.yml`)
+## Relationship to r-universe
 
-`selftest.yml` runs the same resolve/fetch/deps/build/check/size pipeline as
-`build.yml` (they are literally the same script, `scripts/build.sh`), minus
-the attestation and staged-artifact upload. Call it from any fork:
+`build.yml` starts from a verbatim, sha-pinned copy of
+[r-universe-org/workflows](https://github.com/r-universe-org/workflows)'
+reusable `build.yml` -- same `build-source`/`linux-*`/`bioc-check` actions,
+same `check.Renviron`/`getdeps.R`. We only diverge where our own constraints
+force it: `actions/build-source/` is a local fork with the packaging-source
+100MB cap turned into a policy-driven env var (SPEC-014's whole reason to
+exist is packages too large for r-universe's own limit); our own `resolve`
+job reads `seandavi/bioc-manifest` and clones `git.bioconductor.org`
+directly instead of r-universe's sync mechanism; dependencies resolve
+against `bioc-registry`'s served repo instead of a `*.r-universe.dev`
+universe; and our output is `staged.json`/`events.ndjson`/attestation
+instead of r-universe's store-package/deploy. Run
+`scripts/upstream-diff.sh` to see exactly how far `build.yml` has drifted
+from upstream at any point.
 
-```yaml
-jobs:
-  selftest:
-    uses: seandavi/bioc-build/.github/workflows/selftest.yml@main
-    with:
-      package: msdata
-      stream: devel   # release | devel, default devel
-```
+Not a divergence, but worth knowing: `MY_UNIVERSE` (`https://<universe>.r-universe.dev`)
+is still set, because it's derived from `inputs.universe` in upstream's own
+workflow-level `env:` block, which we didn't touch. There's no per-job way
+to override a workflow-level `env:` value, so unsetting it would mean
+editing that verbatim block -- a real divergence, not currently made. Two
+visible effects: `entrypoint.sh` prepends `MY_UNIVERSE`'s binary repo ahead
+of ours (harmless -- it's checked first, falls through to bioc-registry/CRAN
+for anything it doesn't have), and for the `devel` stream (no `RELEASE_`
+branch special-case in `entrypoint.sh`) the built package's DESCRIPTION gets
+a `Repository:` field pointing at that r-universe URL even though nothing
+is actually published there.
 
-Or run `workflow_dispatch` on it directly from the Actions tab.
+## Reproducing a build locally
 
-The exact same script is runnable on a laptop with Docker, to reproduce a
-failure bit-for-bit before pushing a fix upstream:
+There's no bespoke script to run by hand any more -- the actual build/check
+steps are r-universe's own `linux-*` actions, running inside
+`ghcr.io/r-universe-org/base-image`. Two ways to reproduce a run:
 
-```bash
-git clone https://github.com/seandavi/bioc-build && cd bioc-build
-mkdir -p work/scripts work/logs
-cp scripts/*.R scripts/build.sh work/scripts/
-docker run --rm -v "$PWD/work:/work" -w /work \
-  -e PACKAGE=msdata -e STREAM=release -e BRANCH=RELEASE_3_23 -e MANIFEST_REF=main \
-  -e RUN_ID=local -e RUN_ATTEMPT=1 -e RUN_URL=local \
-  -e CONTAINER=bioconductor/bioconductor_docker:RELEASE_3_23 \
-  bioconductor/bioconductor_docker:RELEASE_3_23 bash /work/scripts/build.sh
-```
-
-`STREAM=release` needs `BRANCH=RELEASE_3_23` (the current release branch,
-from https://bioconductor.org/config.yaml); `STREAM=devel` needs
-`BRANCH=devel` with the same-tagged container. Output lands in `work/`:
-`staged.json`, `events.ndjson`, `logs/`, and the tarball on success.
+- **One package, by hand**: run `build-package.yml`'s `workflow_dispatch`
+  from the Actions tab with a `package` and `stream`, or call it from
+  another workflow:
+  ```yaml
+  jobs:
+    build:
+      uses: seandavi/bioc-build/.github/workflows/build-package.yml@main
+      with:
+        package: msdata
+        stream: devel   # release | devel
+  ```
+- **Reproduce r-universe's own steps locally**: since `build.yml` is a
+  sha-pinned copy of r-universe's reusable workflow (see below), running it
+  under [`act`](https://github.com/nektos/act) reproduces the same
+  `build-source`/`linux-deps`/`linux-build`/`linux-check` steps a real run
+  uses, against `ghcr.io/r-universe-org/base-image` directly.
 
 ## Trust model
 

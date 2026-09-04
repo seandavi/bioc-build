@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Smoke test for the parsing/decision logic in this dir that isn't exercised
-# by simply reading the code: the flat-YAML bash parser, staged.R's JSON
-# shape (both the full and the all-null failure path), and
-# dispatch_matrix.py's changed/backfill/single decision rules. No docker
-# needed -- pure logic, runs against fixtures in a temp dir.
+# by simply reading the code: build-package.yml's resolve-job bash (copied
+# inline below, same as it appears in the workflow), staged.R's JSON shape
+# (both the full and the all-null failure path), and dispatch_matrix.py's
+# changed/backfill/single decision rules. No docker needed -- pure logic,
+# runs against fixtures in a temp dir.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 TMP=$(mktemp -d)
@@ -11,8 +12,7 @@ trap 'rm -rf "$TMP"' EXIT
 fails=0
 check() { if [ "$1" = "$2" ]; then echo "ok: $3"; else echo "FAIL: $3 (got [$1], want [$2])"; fails=$((fails+1)); fi; }
 
-# --- yaml_get / check_args extraction (build.sh's parser, copied inline
-# since it's a function defined inside build.sh's pipeline subshell) -------
+# --- build-package.yml's resolve job: yaml_get / streams / timeout -------
 yaml_get() { echo "$1" | grep -E "^$2:" | head -1 | sed -E "s/^$2:[[:space:]]*//; s/^\"(.*)\"$/\1/"; }
 
 PKG_YAML='name: msdata
@@ -28,37 +28,10 @@ STREAMS=$(yaml_get "$PKG_YAML" streams | tr -d '[]' | tr ',' '\n' | sed 's/^ *//
 echo "$STREAMS" | grep -qx "release" && check ok ok "streams includes release"
 echo "$STREAMS" | grep -qx "devel" && check ok ok "streams includes devel"
 
-# the real policy.yaml has a trailing comment on the check_args line --
-# regression test for the bug where it leaked into the parsed value.
 POLICY_YAML='policy_version: "2026.09.1"
-defaults: {max_wall_minutes: 340, vignettes: build}
-profiles:
-  data-experiment:
-    check_args: "--no-manual --no-build-vignettes"   # vignettes built by R CMD build already
-  workflows:
-    check_args: "--no-manual"'
-extract_check_args() {
-  echo "$POLICY_YAML" | awk -v p="  $1:" 'BEGIN{f=0} $0==p{f=1;next} f && /^  [a-zA-Z]/{f=0} f && /check_args:/{print; exit}' \
-    | sed -E 's/^[^"]*"([^"]*)".*/\1/'
-}
-check "$(extract_check_args data-experiment)" "--no-manual --no-build-vignettes" "check_args (trailing comment stripped)"
-check "$(extract_check_args workflows)" "--no-manual" "check_args (workflows profile)"
-
-# R CMD check's real "Status:" line ("OK" / "1 NOTE" / "2 WARNINGs" / ...)
-# must collapse to a single space-free word: it gets written verbatim into a
-# KEY=VALUE file that is later `source`d, and "CHECK_STATUS=1 note" runs
-# `note` as a command (this actually happened on ARRmData).
-classify_status() {
-  if echo "$1" | grep -qi ERROR; then echo error
-  elif echo "$1" | grep -qi WARNING; then echo warning
-  elif [ -n "$1" ]; then echo ok
-  else echo error; fi
-}
-check "$(classify_status 'Status: OK')" "ok" "check status: OK"
-check "$(classify_status 'Status: 1 NOTE')" "ok" "check status: 1 NOTE (no space in output)"
-check "$(classify_status 'Status: 2 WARNINGs')" "warning" "check status: WARNINGs"
-check "$(classify_status 'Status: 1 ERROR')" "error" "check status: ERROR"
-check "$(classify_status '')" "error" "check status: missing Status line"
+defaults: {max_wall_minutes: 340, vignettes: build}'
+TIMEOUT=$(echo "$POLICY_YAML" | grep '^defaults:' | grep -o 'max_wall_minutes: *[0-9]*' | grep -o '[0-9]*')
+check "$TIMEOUT" "340" "defaults.max_wall_minutes extraction"
 
 # --- staged.R: full success path and the all-null failure path -----------
 Rscript staged.R ok msdata 0.51.1 release msdata_0.51.1.tar.gz abc123 12345 \
@@ -88,27 +61,37 @@ assert d['tarball']['file'] is None
 assert d['description']['License'] is None
 print('ok: staged.json failure shape (all nulls, still valid)')
 "
+# same all-null shape, built with jq (build-package.yml's resolve job has
+# no R, so its own failure path uses jq instead of staged.R -- must match)
+jq -n --arg pkg nosuchpkg --arg stream release --arg run_id 999 --arg run_attempt 1 \
+  --arg run_url https://example.com/run --arg status "failed:resolve" \
+  '{schema_version:"1",package:$pkg,version:null,stream:$stream,status:$status,
+    tarball:{file:null,sha256:null,size_bytes:null},
+    source:{git_url:null,branch:null,commit:null,commit_time:null},
+    manifest_commit:null,policy_version:null,
+    build:{run_id:$run_id,run_attempt:($run_attempt|tonumber),run_url:$run_url,container:null,r_version:null},
+    check:{status:null,bioccheck:null},
+    description:{Depends:null,Imports:null,Suggests:null,License:null,NeedsCompilation:null,Priority:null,LinkingTo:null,Enhances:null,OS_type:null},
+    meta:{Title:null,Description:null,URL:null,BugReports:null,Maintainer:null,Author:null,biocViews:null}}' > "$TMP/staged_fail_jq.json"
+diff <(python3 -c "import json;print(json.dumps(json.load(open('$TMP/staged_fail.json')),sort_keys=True))") \
+     <(python3 -c "import json;print(json.dumps(json.load(open('$TMP/staged_fail_jq.json')),sort_keys=True))") \
+  && check ok ok "resolve job's jq failure shape matches staged.R's failure shape"
 
-# --- deps.R: DESCRIPTION field parsing (missing fields must not error) ---
-cat > "$TMP/DESCRIPTION" <<'EOF'
-Package: fakepkg
-Version: 1.0
-Depends: R (>= 4.0.0), methods
-Imports: jsonlite, stats
-Suggests: knitr
-EOF
-Rscript -e '
-desc <- read.dcf("'"$TMP"'/DESCRIPTION")[1,]
-parse_field <- function(field) {
-  if (is.na(field) || !nzchar(field)) return(character(0))
-  parts <- strsplit(field, ",")[[1]]
-  parts <- trimws(gsub("\\(.*\\)", "", parts))
-  parts[nzchar(parts) & parts != "R"]
+# R CMD check's real "Status:" line ("OK" / "1 NOTE" / "2 WARNINGs" / ...)
+# must collapse to a single space-free word (build.yml's "bioc-build: stage"
+# step does this from linux-check's checkstatus output: OK/NOTE/WARNING/ERROR/FAILURE).
+classify_status() {
+  case "$1" in
+    FAILURE|ERROR) echo error ;;
+    WARNING) echo warning ;;
+    *) echo ok ;;
+  esac
 }
-direct <- unique(unlist(lapply(c("Depends","Imports","LinkingTo","Suggests"), function(f) parse_field(desc[f]))))
-stopifnot(setequal(direct, c("methods","jsonlite","stats","knitr")))
-cat("ok: deps.R field parsing (LinkingTo absent, no error)\n")
-'
+check "$(classify_status OK)" "ok" "check status: OK"
+check "$(classify_status NOTE)" "ok" "check status: NOTE"
+check "$(classify_status WARNING)" "warning" "check status: WARNING"
+check "$(classify_status ERROR)" "error" "check status: ERROR"
+check "$(classify_status FAILURE)" "error" "check status: FAILURE"
 
 # --- dispatch_matrix.py: single/backfill/changed decision rules ----------
 mkdir -p "$TMP/manifest/packages"

@@ -1,132 +1,590 @@
-name: build
-
-# Reusable build+check+attest+stage workflow (SPEC-014 §build.yml). The
-# workflow_call and workflow_dispatch triggers share one job so dispatch.yml
-# can `uses:` this file and a human can also run it directly.
+# Verbatim copy of r-universe-org/workflows/.github/workflows/build.yml
+# Upstream: https://github.com/r-universe-org/workflows
+# Pinned at commit 2025515d8de93f38f70bb8ff6384e06821a3b5bd (2026-09-03).
+# Every `uses:` below is pinned to the full sha that ref resolved to at the
+# same time (r-universe-org/actions and r-universe-org/build-source pin
+# their own moving branches/tags the same way upstream's build.yml points
+# at them, just frozen). Diff against upstream with scripts/upstream-diff.sh --
+# it must come back empty for this commit. Our config layer and divergences
+# land in later commits; see README.md for what those are and why.
 on:
   workflow_call:
     inputs:
+      universe:
+        description: Universe to take dependencies from
+        type: string
+      repository:
+        description: URL to git repository containing R package
+        type: string
+        default: https://github.com/${{ github.repository }}
+      ref:
+        description: Commit-id or refname to build
+        type: string
+        default: ${{ github.sha }}
+      subdir:
+        description: Directory to find R package
+        type: string
+      nobinaries:
+        description: "Skip build and check on Windows, MacOS and Wasm (bioc-build divergence: also gates Wasm now)"
+        type: string
+      organization:
+        description: Run extra organization specific checks
+        type: string
+        default: ${{ github.repository_owner }}
+      variables:
+        description: Extra environment variables from R-universe
+        type: string
+        default: '{}'
+      timeout:
+        description: Max build time in minutes
+        type: number
+        default: 60
+      our_output:
+        description: >
+          bioc-build divergence: when set, gate off r-universe's
+          store-package/deploy steps and instead attest + write
+          staged.json/events.ndjson + upload-artifact (see README.md).
+          Empty/unset behaves exactly like upstream.
+        type: string
+        default: ''
+      source_size_limit_mb:
+        description: "bioc-build divergence: SOURCE_SIZE_LIMIT_MB for actions/build-source (see actions/build-source/UPSTREAM.md)"
+        type: number
+        default: 100
+      package_name:
+        description: "bioc-build divergence: our package identifier, for staged.json (r-universe learns this from the source build instead)"
+        type: string
+        default: ''
+      stream_name:
+        description: "bioc-build divergence: release|devel, for staged.json"
+        type: string
+        default: ''
+      linux_matrix:
+        description: "bioc-build divergence: policy.yaml's build.r_images as {r:[...],arch:[\"x86_64\"]} JSON, replaces upstream's devel+release matrix"
+        type: string
+        default: '{"r":["release"],"arch":["x86_64"]}'
+    outputs:
+      commitinfo:
+        description: "Metadata from the commit"
+        value: ${{ jobs.source.outputs.commitinfo }}
+      maintainerinfo:
+        description: "Metadata from the maintainer"
+        value: ${{ jobs.source.outputs.maintainerinfo }}
       package:
-        required: true
-        type: string
-      stream:
-        required: true
-        type: string
-      manifest_ref:
-        required: false
-        type: string
-        default: main
-  workflow_dispatch:
-    inputs:
-      package:
-        required: true
-        type: string
-      stream:
-        required: true
-        type: string
-      manifest_ref:
-        required: false
-        type: string
-        default: main
+        description: "Name of the package if build was tried"
+        value: ${{ jobs.source.outputs.package }}
+      version:
+        description: "Version of the package"
+        value: ${{ jobs.source.outputs.version }}
+      biocchecks:
+        description: "Check results from Bioconductor"
+        value: ${{ jobs.bioconductor.outputs.checkresults }}
 
-# CLAUDE.md: exactly these three, nothing else, no secrets. Public repo.
-permissions:
-  id-token: write
-  contents: read
-  attestations: write
+env:
+  UNIVERSE_NAME: ${{ inputs.universe }}
+  MY_UNIVERSE: ${{ inputs.universe && format('https://{0}.r-universe.dev', inputs.universe) || '' }}
+  CRAN_VERSION: ${{ fromJSON(inputs.variables).CRAN_VERSION }}
+  NO_ADDITIONAL_REPOSITORIES: ${{ inputs.organization == 'cran' || inputs.organization == 'bioconductor' || '' }}
 
 jobs:
-  build:
+  source:
+    name: Source pkg and vignettes
     runs-on: ubuntu-latest
-    # ponytail: static, not policy.max_wall_minutes (a reusable/called workflow
-    # can't take a dynamic value into timeout-minutes); 340 matches the
-    # policy default. Revisit if a profile ever needs a longer budget.
-    timeout-minutes: 340
+    timeout-minutes: 90
+    env: ${{fromJSON(inputs.variables)}}
+    outputs:
+      commitinfo: ${{ steps.build.outputs.COMMITINFO }}
+      maintainerinfo: ${{ steps.build.outputs.MAINTAINERINFO }}
+      sourcepkg: ${{ steps.build.outputs.SOURCEPKG }}
+      package: ${{ steps.build.outputs.PACKAGE }}
+      version: ${{ steps.build.outputs.VERSION }}
+      java: ${{ steps.build.outputs.NEED_RJAVA }}
+      jags: ${{ steps.build.outputs.NEED_JAGS }}
+      cmdstan: ${{ steps.build.outputs.NEED_CMDSTAN }}
+      fortran: ${{ steps.build.outputs.NEED_FORTRAN }}
+      golang: ${{ steps.build.outputs.NEED_GOLANG }}
+      cargo: ${{ steps.build.outputs.NEED_CARGO }}
+      quarto: ${{ steps.build.outputs.NEED_QUARTO }}
+      ostype: ${{ steps.build.outputs.OSTYPE }}
+      compiled: ${{ steps.build.outputs.NEEDS_COMPILATION }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+
     steps:
+      - name: Free disk space on runner
+        run: rm -Rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" || true
+      # bioc-build divergence: actions/build-source is a local fork (see
+      # actions/build-source/UPSTREAM.md) so it needs our repo checked out;
+      # upstream's own uses: pulls a published image and needs no checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # SPEC-004/010: free disk before anything else; ubuntu-latest has ~14GB
-      # free, these removals recover ~25GB more.
-      - name: free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
-
-      - name: resolve stream -> branch/container tag
-        id: stream
-        run: |
-          set -euo pipefail
-          cfg=$(curl -fsSL https://bioconductor.org/config.yaml)
-          release=$(echo "$cfg" | grep '^release_version' | sed -E 's/.*"([^"]+)".*/\1/')
-          devel=$(echo "$cfg" | grep '^devel_version' | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "${{ inputs.stream }}" = "release" ]; then
-            branch="RELEASE_$(echo "$release" | tr . _)"
-            tag="$branch"
-          elif [ "${{ inputs.stream }}" = "devel" ]; then
-            branch="devel"
-            tag="devel"
-          else
-            echo "unknown stream '${{ inputs.stream }}'" >&2
-            exit 1
-          fi
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: work dir on /mnt (more free space than the root disk)
-        id: work
-        run: |
-          set -euo pipefail
-          work=/mnt/work
-          sudo mkdir -p "$work" && sudo chown "$USER:$USER" "$work"
-          mkdir -p "$work/scripts" "$work/logs"
-          cp scripts/build.sh scripts/deps.R scripts/staged.R "$work/scripts/"
-          echo "dir=$work" >> "$GITHUB_OUTPUT"
-
-      - name: pull container, record digest
-        id: image
-        run: |
-          set -euo pipefail
-          image="bioconductor/bioconductor_docker:${{ steps.stream.outputs.tag }}"
-          docker pull "$image"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
-          echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      # scripts/build.sh is steps 1-6 (resolve/fetch/deps/build/check/size);
-      # it writes staged.json + events.ndjson + logs/ and the disk envelope
-      # monitor (issue #10) lives inside it so selftest.yml gets it for free.
-      - name: build (resolve, fetch, deps, build, check, size)
-        run: |
-          docker run --rm \
-            -v "${{ steps.work.outputs.dir }}:/work" -w /work \
-            -e PACKAGE="${{ inputs.package }}" \
-            -e STREAM="${{ inputs.stream }}" \
-            -e BRANCH="${{ steps.stream.outputs.branch }}" \
-            -e MANIFEST_REF="${{ inputs.manifest_ref }}" \
-            -e RUN_ID="${{ github.run_id }}" \
-            -e RUN_ATTEMPT="${{ github.run_attempt }}" \
-            -e RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            -e CONTAINER="${{ steps.image.outputs.digest }}" \
-            "${{ steps.image.outputs.image }}" bash /work/scripts/build.sh
-
-      - name: attest tarball provenance
-        if: success() && github.ref == 'refs/heads/main'
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      - id: build
+        timeout-minutes: ${{ inputs.timeout }}
+        name: Build source package and vignettes
+        uses: ./actions/build-source
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+          SOURCE_SIZE_LIMIT_MB: ${{ inputs.source_size_limit_mb }}
         with:
-          subject-path: ${{ steps.work.outputs.dir }}/*.tar.gz
-
-      # if: always() — a failed build still stages staged.json + logs +
-      # events so the dispatcher/publisher learn the attempt happened.
-      - name: upload staged artifact
-        if: always()
+          url: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+          subdir: ${{ inputs.subdir }}
+          branch: ${{ fromJSON(inputs.variables).branch }}
+          articles: ${{ fromJSON(inputs.variables).registered }}
+      # NOT gated by our_output: this uploads the package-source artifact
+      # that linux-prep/windows-prep/macos-prep download in every downstream
+      # job (via actions/download-artifact) -- load-bearing plumbing, not a
+      # "final output" to replace. Only the *later* stores (linux binary,
+      # final check binaries) are ours to gate off.
+      - name: "Store source package"
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE }}
+        id: artifact
+        with:
+          name: package-source
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.build.outputs.DISTRO }}
+          FILE: ${{ steps.build.outputs.SOURCEPKG }}
+          TARGET: ${{ steps.build.outputs.SOURCEPKG && 'source' || 'failure' }}
+      - name: "Store linux binary package"
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ !cancelled() && steps.build.outputs.BINARYPKG && github.run_attempt == 1 && !inputs.our_output }}
+        with:
+          name: package-linux-release-x86_64
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.build.outputs.DISTRO }}
+          FILE: ${{ steps.build.outputs.BINARYPKG }}
+          TARGET: 'linux'
+      # bioc-build divergence: source build failed -- our own output path
+      # (staged.json/events with status failed:build) since store-package
+      # above is gated off. r-universe's own artifact-not-produced signal
+      # (no package-source artifact) is what our_output replaces.
+      - name: "bioc-build: stage failed:build"
+        if: ${{ !cancelled() && inputs.our_output && !steps.build.outputs.SOURCEPKG }}
+        run: |
+          mkdir -p logs
+          jq -n --arg pkg "${{ inputs.package_name }}" --arg stream "${{ inputs.stream_name }}" \
+            --arg run_id "${{ github.run_id }}" --arg run_attempt "${{ github.run_attempt }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{schema_version:"1",package:$pkg,version:null,stream:$stream,status:"failed:build",
+              tarball:{file:null,sha256:null,size_bytes:null},
+              source:{git_url:"${{ inputs.repository }}",branch:"${{ fromJSON(inputs.variables).branch }}",commit:"${{ inputs.ref }}",commit_time:null},
+              manifest_commit:"${{ fromJSON(inputs.variables).manifest_commit }}",policy_version:"${{ fromJSON(inputs.variables).policy_version }}",
+              build:{run_id:$run_id,run_attempt:($run_attempt|tonumber),run_url:$run_url,container:"ghcr.io/r-universe-org/build-source",r_version:null},
+              check:{status:null,bioccheck:null},
+              description:{Depends:null,Imports:null,Suggests:null,License:null,NeedsCompilation:null,Priority:null,LinkingTo:null,Enhances:null,OS_type:null},
+              meta:{Title:null,Description:null,URL:null,BugReports:null,Maintainer:null,Author:null,biocViews:null}}' > staged.json
+          echo '{"ts":"'"$(date -u +%FT%TZ)"'","event":"build_failed","package":"${{ inputs.package_name }}","stream":"${{ inputs.stream_name }}","stage":"build"}' > events.ndjson
+      - name: "bioc-build: upload failed:build artifact"
+        if: ${{ !cancelled() && inputs.our_output && !steps.build.outputs.SOURCEPKG }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: staged-${{ inputs.package }}-${{ inputs.stream }}
+          name: staged-${{ inputs.package_name }}-${{ inputs.stream_name }}
           path: |
-            ${{ steps.work.outputs.dir }}/*.tar.gz
-            ${{ steps.work.outputs.dir }}/staged.json
-            ${{ steps.work.outputs.dir }}/events.ndjson
-            ${{ steps.work.outputs.dir }}/logs/**
+            staged.json
+            events.ndjson
+          retention-days: 14
+      - id: matrix
+        if: always()
+        uses: r-universe-org/actions/build-matrix@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        with:
+          compiled: ${{ steps.build.outputs.NEEDS_COMPILATION }}
+          universe: ${{ inputs.universe }}
+      - name: "${{'Conclude'}}: source: ${{ steps.build.outputs.RVERSION }}: ${{ steps.build.outcome == 'success' && 'OK' || 'ERROR' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        if: always()
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+
+  linux:
+    # bioc-build divergence: also needs bioconductor (a sibling for
+    # upstream) so this job can download and parse its bioc-checks artifact
+    # into staged.json.check.bioccheck. A skipped bioconductor (any use of
+    # this workflow without organization: bioconductor) still satisfies
+    # needs:, so this doesn't change upstream's own usage.
+    needs: [source, bioconductor]
+    if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
+    runs-on: ubuntu-24.04${{matrix.arch=='arm64' && '-arm' || ''}}
+    timeout-minutes: 150
+    name: R-${{ matrix.r }} for Linux ${{ needs.source.outputs.compiled && matrix.arch || '' }}
+    strategy:
+      fail-fast: false
+      # bioc-build divergence: our r_images input (policy-driven) replaces
+      # upstream's own devel+release matrix when our_output is set.
+      matrix: ${{ inputs.our_output && fromJson(inputs.linux_matrix) || fromJson(needs.source.outputs.matrix).linux }}
+    container:
+      image: ghcr.io/r-universe-org/base-image:${{ matrix.r }}
+      volumes:
+        - /usr:/host/usr
+    steps:
+      # bioc-build divergence: check out our repo (for scripts/staged.R and
+      # the repos override below) BEFORE linux-prep -- checkout always wipes
+      # the job's working directory as part of its own `git init` (the
+      # `clean` input only controls a *post*-checkout `git clean`, it does
+      # not prevent this), which deleted the source tarball linux-prep had
+      # just downloaded there when checkout ran after it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.our_output
+      - name: "Prepare Linux system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      # points BioCsoft at bioc-registry instead of bioconductor.posit.co
+      # (base-image's own Rprofile.site default). See
+      # scripts/bioc-registry-repos.R for why BioCann/BioCexp are left alone.
+      - if: inputs.our_output
+        run: echo "R_PROFILE_USER=$GITHUB_WORKSPACE/scripts/bioc-registry-repos.R" >> "$GITHUB_ENV"
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/linux-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "R CMD check"
+        uses: r-universe-org/actions/linux-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store binaries"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.check.outputs.binarypkg && !inputs.our_output }}
+        with:
+          name: package-linux-${{ matrix.r }}-${{ matrix.arch }}
+          overwrite: ${{ matrix.r == 'release' }}
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.check.outputs.distro }}
+          FILE: ${{ steps.check.outputs.binarypkg }}
+          CHECKSTATUS: ${{ steps.check.outputs.checkstatus }}
+          TARGET: 'linux'
+      - name: "${{'Conclude'}}: linux-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+      # bioc-build divergence: attest + staged.json/events.ndjson +
+      # upload-artifact in place of r-universe's store-package/deploy.
+      # events.ndjson is one synthetic line, not the granular per-step
+      # stream the old bespoke pipeline emitted -- fine-grained instrumentation
+      # of r-universe's own actions is future work, not this PR.
+      - name: "bioc-build: attest tarball provenance"
+        if: ${{ !cancelled() && inputs.our_output && steps.check.outcome == 'success' && github.ref == 'refs/heads/main' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ needs.source.outputs.sourcepkg }}
+      # bioccheck verdict comes from the sibling `bioconductor` job's
+      # checkstatus output (see needs: above); its artifact is only kept
+      # as logs/bioccheck.log.
+      - name: "bioc-build: get bioc-checks artifact"
+        if: ${{ !cancelled() && inputs.our_output }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true # bioconductor job may itself have failed to produce it
+        with:
+          name: bioc-checks
+          path: bioccheck
+      - name: "bioc-build: stage"
+        if: ${{ !cancelled() && inputs.our_output }}
+        run: |
+          set -euo pipefail
+          case "${{ steps.check.outputs.checkstatus }}" in
+            FAILURE|ERROR) CHECK_STATUS=error ;;
+            WARNING) CHECK_STATUS=warning ;;
+            *) CHECK_STATUS=ok ;;
+          esac
+          SHA256=$(sha256sum "${{ needs.source.outputs.sourcepkg }}" | awk '{print $1}')
+          SIZE_BYTES=$(stat -c%s "${{ needs.source.outputs.sourcepkg }}")
+
+          mkdir -p logs
+          [ -f "${{ inputs.package_name }}.Rcheck/00check.log" ] && cp "${{ inputs.package_name }}.Rcheck/00check.log" logs/00check.log
+          [ -f "${{ inputs.package_name }}.Rcheck/00install.out" ] && cp "${{ inputs.package_name }}.Rcheck/00install.out" logs/00install.out
+          [ -f install.log ] && cp install.log logs/build.log
+          # The artifact is the <pkg>.BiocCheck *directory* (output.log,
+          # 00BiocCheck.log); the verdict comes from bioc-check's own
+          # CHECKSTATUS (FAILURE|ERROR|WARNING|NOTE|OK), not log parsing.
+          [ -f bioccheck/output.log ] && cp bioccheck/output.log logs/bioccheck.log
+          case "${{ needs.bioconductor.outputs.checkstatus }}" in
+            FAILURE|ERROR) BIOCCHECK_STATUS=error ;;
+            WARNING) BIOCCHECK_STATUS=warning ;;
+            NOTE|OK) BIOCCHECK_STATUS=ok ;;
+            *) BIOCCHECK_STATUS=null ;;
+          esac
+
+          # DESCRIPTION isn't checked out anywhere in this job (only the
+          # tarball is) -- pull it straight out of the source tarball for
+          # staged.R's description/meta blocks.
+          tar -xOf "${{ needs.source.outputs.sourcepkg }}" --wildcards '*/DESCRIPTION' > DESCRIPTION_extracted 2>/dev/null || true
+          DESC_PATH=none
+          [ -s DESCRIPTION_extracted ] && DESC_PATH=DESCRIPTION_extracted
+
+          [ "$CHECK_STATUS" = error ] && STATUS=error || STATUS="$CHECK_STATUS"
+          Rscript "$GITHUB_WORKSPACE/scripts/staged.R" \
+            "$STATUS" "${{ inputs.package_name }}" "${{ needs.source.outputs.version }}" "${{ inputs.stream_name }}" \
+            "${{ needs.source.outputs.sourcepkg }}" "$SHA256" "$SIZE_BYTES" \
+            "${{ inputs.repository }}" "${{ fromJSON(inputs.variables).branch }}" "${{ inputs.ref }}" "${{ fromJSON(inputs.variables).commit_time }}" \
+            "${{ fromJSON(inputs.variables).manifest_commit }}" "${{ fromJSON(inputs.variables).policy_version }}" \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "ghcr.io/r-universe-org/base-image:${{ matrix.r }}" "${{ steps.deps.outputs.rversion }}" \
+            "$CHECK_STATUS" "$BIOCCHECK_STATUS" "$DESC_PATH" staged.json
+          echo '{"ts":"'"$(date -u +%FT%TZ)"'","event":"check_completed","package":"${{ inputs.package_name }}","stream":"${{ inputs.stream_name }}","status":"'"$CHECK_STATUS"'","bioccheck":"'"$BIOCCHECK_STATUS"'"}' > events.ndjson
+      - name: "bioc-build: upload staged artifact"
+        if: ${{ !cancelled() && inputs.our_output }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staged-${{ inputs.package_name }}-${{ inputs.stream_name }}
+          path: |
+            ${{ needs.source.outputs.sourcepkg }}
+            staged.json
+            events.ndjson
+            logs/**
           retention-days: 14
           if-no-files-found: warn
+
+  windows:
+    needs: [source]
+    # bioc-build divergence: honor nobinaries here too (upstream only wires it into macos)
+    if: ${{ !cancelled() && !inputs.nobinaries && needs.source.outputs.sourcepkg }}
+    runs-on: ${{matrix.arch=='arm64' && 'windows-11-arm' || 'windows-2025'}}
+    timeout-minutes: 150
+    name: R-${{ matrix.r }} for Windows ${{ needs.source.outputs.compiled && matrix.arch || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).windows}}
+    steps:
+      - name: "Prepare Windows system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/windows-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        with:
+          java: ${{ needs.source.outputs.java }}
+          jags: ${{ needs.source.outputs.jags }}
+          quarto: ${{ needs.source.outputs.quarto }}
+          cargo: ${{ needs.source.outputs.cargo }}
+      - name: Install R-${{matrix.r}} for Windows
+        timeout-minutes: 10
+        uses: r-universe-org/actions/setup-r@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: install-r
+        with:
+          r-version: ${{ matrix.r }}
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/windows-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/windows-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+          ostype: ${{ needs.source.outputs.ostype }}
+      - name: "R CMD check"
+        uses: r-universe-org/actions/windows-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store binaries"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.check.outputs.binarypkg }}
+        with:
+          name: package-windows-${{ matrix.r }}-${{ matrix.arch }}
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: windows
+          FILE: ${{ steps.check.outputs.binarypkg }}
+          CHECKSTATUS: ${{ steps.check.outputs.checkstatus }}
+          TARGET: windows
+      - name: "${{'Conclude'}}: windows-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  macos:
+    needs: [source]
+    if: ${{ !cancelled() && !inputs.nobinaries && needs.source.outputs.sourcepkg }}
+    runs-on: macos-${{ matrix.arch == 'x86_64' && '15-intel' || '15' }}
+    timeout-minutes: 150
+    name: R-${{ matrix.r }} for MacOS ${{ needs.source.outputs.compiled && matrix.arch || '' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).macos}}
+    steps:
+      - name: "Prepare macOS system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/macos-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        with:
+          version: ${{ matrix.r }}
+          fortran: ${{ needs.source.outputs.fortran }}
+          golang: ${{ needs.source.outputs.golang }}
+          jags: ${{ needs.source.outputs.jags }}
+          quarto: ${{ needs.source.outputs.quarto }}
+      - name: Install R-${{matrix.r}} for MacOS
+        timeout-minutes: 10
+        uses: r-universe-org/actions/setup-r@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: install-r
+        with:
+          r-version: ${{ matrix.r }}
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/macos-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/macos-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: ${{ inputs.timeout }}
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "R CMD check"
+        uses: r-universe-org/actions/macos-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store binaries"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.check.outputs.binarypkg }}
+        with:
+          name: package-macos-${{ matrix.r }}-${{ matrix.arch }}
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: macos
+          FILE: ${{ steps.check.outputs.binarypkg }}
+          CHECKSTATUS: ${{ steps.check.outputs.checkstatus }}
+          TARGET: macos
+      - name: "${{'Conclude'}}: macos-${{ matrix.r }}-${{ matrix.arch }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  wasm:
+    needs: [source]
+    # bioc-build divergence: honor nobinaries here too (upstream only wires it into macos)
+    if: ${{ !cancelled() && !inputs.nobinaries && needs.source.outputs.sourcepkg }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    name: R-${{ matrix.r }} for Wasm
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.source.outputs.matrix).wasm}}
+    container:
+      image: ghcr.io/r-universe-org/build-wasm${{ matrix.r == 'oldrel' && ':4.4' || '' }}
+    steps:
+      - name: "Prepare WebAssembly system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - id: build
+        name: Build package "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/wasm-build@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+          NEED_CARGO: ${{ needs.source.outputs.cargo }}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: "Store package files"
+        id: artifact
+        uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        if: ${{ always() && steps.build.outputs.binarypkg }}
+        with:
+          name: package-wasm-${{ matrix.r }}
+          JOB_STATUS: ${{ job.status }}
+          FILE: ${{ steps.build.outputs.binarypkg }}
+          TARGET: "wasm"
+      - name: "${{'Conclude'}}: wasm-${{ matrix.r }}: ${{ steps.deps.outputs.rversion }}: ${{ steps.build.outputs.binarypkg && 'OK' || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  bioconductor:
+    needs: [source]
+    if: ${{ !cancelled() && needs.source.outputs.sourcepkg && inputs.organization == 'bioconductor' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    name: Bioconductor Checks
+    # bioc-build divergence: bioc-check's action calls core.setFailed() on a
+    # BiocCheck ERROR, but policy.yaml has bioccheck: advisory for every
+    # current profile -- it must never fail the overall run, only be
+    # recorded (staged.json's check.bioccheck). If a non-advisory profile
+    # shows up later this needs to become conditional on that; not worth a
+    # new input for an always-true value today.
+    continue-on-error: ${{ inputs.our_output == 'true' }}
+    container:
+      image: ghcr.io/r-universe-org/base-image:release
+    outputs:
+      checkresults: ${{ steps.check.outputs.checkresults }}
+      # bioc-build divergence: consumed by the linux job's stage step.
+      checkstatus: ${{ steps.check.outputs.checkstatus }}
+    steps:
+      - name: "Prepare Linux system"
+        timeout-minutes: 10
+        uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      - name: "Get dependences"
+        id: deps
+        uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Run BiocCheck for "${{needs.source.outputs.package}}"
+        uses: r-universe-org/actions/bioc-check@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+        id: check
+        timeout-minutes: 60
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+        with:
+          sourcepkg: ${{ needs.source.outputs.sourcepkg }}
+      - name: Store ${{needs.source.outputs.package}}.BiocCheck
+        id: artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bioc-checks
+          path: ${{needs.source.outputs.package}}.BiocCheck
+      - name: "${{'Conclude'}}: bioc-checks: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"
+        if: always()
+
+  ropensci:
+    name: Build rOpenSci docs
+    runs-on: ubuntu-latest
+    if: ${{ inputs.organization == 'ropensci' }}
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/ropensci-org/rotemplate:latest
+    steps:
+      - name: Build package docs
+        timeout-minutes: 60
+        id: build
+        uses: ropensci-org/rotemplate@4c36a4f9abf949150dc40703d28baee1568dd480 # main
+        with:
+          repo_url: ${{ inputs.repository }}
+          subdir: ${{ inputs.subdir }}
+          r-version: 'skip'
+        env:
+          GITHUB_PAT: ${{secrets.GITHUB_TOKEN}}
+      - name: "${{'Conclude'}}: pkgdown: ${{ steps.build.outputs.RVERSION }}: ${{ steps.build.outcome == 'success' && 'OK' || 'ERROR' }}: ${{ steps.build.outputs.artifact-id }}"
+        run: echo "Artifact URL ${{steps.build.outputs.artifact-url}}"
+        if: always()

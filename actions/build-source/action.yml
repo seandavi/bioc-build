@@ -1,0 +1,53 @@
+name: 'Create R source package'
+description: 'Creates source package from git url'
+inputs:
+  url:
+    description: 'Git URL where to clone from'
+    required: true
+  ref:
+    description: 'Which commit to checkout'
+    required: false
+  subdir:
+    description: 'Subdirectory in which the package lives'
+    required: false
+  branch:
+    description: 'Name of the branch we are tracking'
+    required: false
+  articles:
+    description: 'Should we build articles (vignettes)'
+    required: false
+outputs:
+  PACKAGE:
+    description: 'Name of the package'
+  VERSION:
+    description: 'Version of the package'
+  SOURCEPKG:
+    description: 'Filename of the source package'
+  BINARYPKG:
+    description: 'Filename of the binary package'
+  COMMIT_TIMESTAMP:
+    description: 'Time of the last commit'
+  PKGLOGO:
+    description: 'Path to logo within pkg dir'
+  MAINTAINERINFO:
+    description: 'Base64 encoded JSON list with maintainer data'
+  VIGNETTES:
+    description: 'Base64 encoded JSON vignettes list'
+  COMMITINFO:
+    description: 'Base64 encoded JSON list with commit data'
+  GITSTATS:
+    description: 'Base64 encoded JSON list with git stats'
+  NEEDS_COMPILATION:
+    description: 'If the source package has a src dir'
+  RVERSION:
+    description: 'Version of R used'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  args:
+    - ${{ inputs.url }}
+    - ${{ inputs.ref }}
+    - ${{ inputs.subdir }}
+    - ${{ inputs.branch }}
+    - ${{ inputs.articles }}

@@ -1,8 +1,8 @@
 #!/usr/bin/env Rscript
-# The one place staged.json gets written, called from build.sh on every exit
-# path (success or failed:<stage>) so the shape in SPEC-014 is never
-# duplicated. Positional args, "null"/"none" standing in for absent values
-# since bash has no native null.
+# The one place staged.json gets written, called from build.yml's `linux`
+# job (see the "bioc-build: stage" step) on every exit path so the shape in
+# SPEC-014 is never duplicated. Positional args, "null"/"none" standing in
+# for absent values since bash has no native null.
 a <- commandArgs(TRUE)
 g <- function(i) if (a[i] %in% c("null", "")) NA else a[i]
 status        <- a[1]

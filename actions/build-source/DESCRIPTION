@@ -1,0 +1,33 @@
+Package: buildtools
+Type: Package
+Title: R-universe build tools
+Version: 1.0.0
+Author: Jeroen Ooms
+Maintainer: Jeroen Ooms <jeroen@berkeley.edu>
+Description: Some utilities for when building the source package.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    cffr,
+    commonmark,
+    curl,
+    data.table,
+    downlit,
+    gert (>= 1.6.0),
+    gh,
+    htmlwidgets,
+    jsonlite,
+    knitr,
+    lubridate,
+    maketools,
+    markdown,
+    pak,
+    pdftools,
+    postdoc (>= 1.4.1),
+    remotes,
+    rmarkdown,
+    unix,
+    yaml,
+    xml2
+RoxygenNote: 7.3.2.9000
