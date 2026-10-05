@@ -18,6 +18,15 @@ that artifact itself (`pkgdata.txt` + `actions/upload-artifact`, same name and
 file list) so the policy limit is the only cap. First hit by bsseqData
 (run 37378855915).
 
+Artifact names are run-scoped, and `dispatch.yml` fans every pair into one
+run, so upstream's fixed `package-source` and `bioc-checks` names make pairs
+overwrite or read each other's artifacts (backfill run 37382259834: 38 of 41
+pairs ended `failed:envelope` because the linux job found another package's
+tarball). With `our_output`, both are named `<name>-<package>-<stream>`, and
+the linux/bioconductor jobs fetch the source package through
+`actions/linux-prep`, a copy of `r-universe-org/actions/linux-prep` (minus its
+r-universe-only disk step) taking the artifact name as an input.
+
 `action.yml` also points `runs.image` at the local `Dockerfile` instead of
 `docker://ghcr.io/r-universe-org/build-source`, so this action builds at run
 time rather than pulling a published image. That costs a Docker build every
