@@ -125,10 +125,6 @@ jobs:
           commit=$(git ls-remote "$git_url" "$branch" | awk '{print $1}')
           [ -n "$commit" ] || { fail fetch "git ls-remote $git_url $branch returned nothing"; exit 0; }
 
-          # ponytail: commit_time left out of variables (and so out of
-          # staged.json) -- build-source's own COMMITINFO output has it
-          # base64-gzip-encoded; decoding it here isn't worth the complexity
-          # yet. staged.R already renders source.commit_time: null cleanly.
           # -c: compact, single-line -- $GITHUB_OUTPUT is key=value per line,
           # and jq -n's default pretty-print breaks that (this actually
           # happened: "Invalid format" on the multi-line JSON).

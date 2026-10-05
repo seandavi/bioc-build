@@ -322,10 +322,11 @@ jobs:
           [ -s DESCRIPTION_extracted ] && DESC_PATH=DESCRIPTION_extracted
 
           [ "$CHECK_STATUS" = error ] && STATUS=error || STATUS="$CHECK_STATUS"
+          COMMIT_TIME=$(Rscript "$GITHUB_WORKSPACE/scripts/commit_time.R" "${{ needs.source.outputs.commitinfo }}")
           Rscript "$GITHUB_WORKSPACE/scripts/staged.R" \
             "$STATUS" "${{ inputs.package_name }}" "${{ needs.source.outputs.version }}" "${{ inputs.stream_name }}" \
             "${{ needs.source.outputs.sourcepkg }}" "$SHA256" "$SIZE_BYTES" \
-            "${{ inputs.repository }}" "${{ fromJSON(inputs.variables).branch }}" "${{ inputs.ref }}" "${{ fromJSON(inputs.variables).commit_time }}" \
+            "${{ inputs.repository }}" "${{ fromJSON(inputs.variables).branch }}" "${{ inputs.ref }}" "$COMMIT_TIME" \
             "${{ fromJSON(inputs.variables).manifest_commit }}" "${{ fromJSON(inputs.variables).policy_version }}" \
             "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             "ghcr.io/r-universe-org/base-image:${{ matrix.r }}" "${{ steps.deps.outputs.rversion }}" \
