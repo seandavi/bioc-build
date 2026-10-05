@@ -71,6 +71,25 @@ steps are r-universe's own `linux-*` actions, running inside
   `build-source`/`linux-deps`/`linux-build`/`linux-check` steps a real run
   uses, against `ghcr.io/r-universe-org/base-image` directly.
 
+## Runbook
+
+**Dispatch.** `gh workflow run dispatch.yml -R seandavi/bioc-build -f mode=<mode> [-f packages=a,b] [-f stream=release|devel]`.
+
+- `single`: exactly the given packages and stream (stream required), no change check.
+- `backfill`: every active `(package, stream)` in bioc-manifest, optionally filtered by `packages`/`stream`. This is how a new package first enters; run it with an explicit `packages=` list.
+- `changed`: what the 6-hourly cron runs. Curated: only pairs already in `attempts.json` (see below).
+
+**Reading `attempts.json`.** `https://bioc-registry.seandavi.workers.dev/data/state/bioc-build/attempts.json`, shape `{pkg: {stream: {commit, status, run_id, run_url, ts, attempts}}}`, written by the publisher. A `failed:*` status is retried by the cron up to 3 times at the same commit. `rejected:<rule>` is not retried until the remote head moves. Pairs that were never attempted are never rebuilt by the cron. The publisher sweeps every 4-6 h, so a finished run shows up there with that delay.
+
+**Rolling back an index entry.**
+
+1. Fetch the prior record from R2 `prop/<u>/log/<ts>-<pkg>_<ver>.json` and drop its `package` and `run_id` keys.
+2. Write that record into `state/bioc-build/published.json` at `[<u>][<pkg>]` with `aws s3 cp` (R2 endpoint, GSM `cdsci-r2-*` keys).
+3. On the next publish.yml sweep, the self-heal re-POST upserts it into `prop/<u>/index.json`. The route accepts an entry without `staged` only if it is byte-identical to the `published.json` record.
+4. To remove an entry entirely, delete the key from both `published.json` and `prop/<u>/index.json`. To stop future rebuilds, set `state: deprecated` in bioc-manifest via a PR.
+
+**The cron can switch itself off.** GitHub disables `schedule:` workflows after 60 days with no commits to the repo. Re-enable with `gh workflow enable dispatch.yml -R seandavi/bioc-build`. There is no keepalive commit, because it would need `contents: write`.
+
 ## Trust model
 
 This repo is public and holds no secrets. Workflow permissions are exactly
