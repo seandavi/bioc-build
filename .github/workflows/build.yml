@@ -166,7 +166,8 @@ jobs:
         if: ${{ !cancelled() && steps.build.outputs.PACKAGE && inputs.our_output }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: package-source
+          name: ${{ inputs.our_output && format('package-source-{0}-{1}', inputs.package_name, inputs.stream_name) || 'package-source' }}
+          retention-days: 1
           path: |
             ${{ steps.build.outputs.SOURCEPKG }}
             pkgdata.txt
@@ -255,8 +256,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: inputs.our_output
       - name: "Prepare Linux system"
+        if: ${{ !inputs.our_output }}
         timeout-minutes: 10
         uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      # bioc-build divergence: package-source is run-scoped and dispatch.yml
+      # fans many pairs into one run, so each pair's artifact is named per
+      # pair and fetched by our fork of linux-prep (actions/linux-prep).
+      - name: "Prepare Linux system (bioc-build)"
+        if: inputs.our_output
+        timeout-minutes: 10
+        uses: ./actions/linux-prep
+        with:
+          source_artifact: ${{ format('package-source-{0}-{1}', inputs.package_name, inputs.stream_name) }}
       # points BioCsoft at bioc-registry instead of bioconductor.posit.co
       # (base-image's own Rprofile.site default). See
       # scripts/bioc-registry-repos.R for why BioCann/BioCexp are left alone.
@@ -318,7 +329,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true # bioconductor job may itself have failed to produce it
         with:
-          name: bioc-checks
+          name: ${{ format('bioc-checks-{0}-{1}', inputs.package_name, inputs.stream_name) }}
           path: bioccheck
       - name: "bioc-build: stage"
         if: ${{ !cancelled() && inputs.our_output }}
@@ -571,9 +582,23 @@ jobs:
       # bioc-build divergence: consumed by the linux job's stage step.
       checkstatus: ${{ steps.check.outputs.checkstatus }}
     steps:
+      # bioc-build divergence: checkout first (it wipes the workspace) so the
+      # local linux-prep fork below is available; see the linux job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: inputs.our_output
       - name: "Prepare Linux system"
+        if: ${{ !inputs.our_output }}
         timeout-minutes: 10
         uses: r-universe-org/actions/linux-prep@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
+      # bioc-build divergence: package-source is run-scoped and dispatch.yml
+      # fans many pairs into one run, so each pair's artifact is named per
+      # pair and fetched by our fork of linux-prep (actions/linux-prep).
+      - name: "Prepare Linux system (bioc-build)"
+        if: inputs.our_output
+        timeout-minutes: 10
+        uses: ./actions/linux-prep
+        with:
+          source_artifact: ${{ format('package-source-{0}-{1}', inputs.package_name, inputs.stream_name) }}
       - name: "Get dependences"
         id: deps
         uses: r-universe-org/actions/linux-deps@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
@@ -595,7 +620,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: bioc-checks
+          name: ${{ inputs.our_output && format('bioc-checks-{0}-{1}', inputs.package_name, inputs.stream_name) || 'bioc-checks' }}
+          retention-days: 1
           path: ${{needs.source.outputs.package}}.BiocCheck
       - name: "${{'Conclude'}}: bioc-checks: ${{ steps.deps.outputs.rversion }}: ${{ steps.check.outputs.checkstatus || 'FAIL' }}: ${{ steps.artifact.outputs.artifact-id }}"
         run: echo "Artifact URL ${{steps.artifact.outputs.artifact-url}}"

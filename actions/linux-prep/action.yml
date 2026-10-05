@@ -1,0 +1,25 @@
+name: 'Prepare Linux (bioc-build)'
+description: >
+  Fork of r-universe-org/actions/linux-prep: the source-package artifact name
+  is an input, so that the many (package, stream) builds one dispatch.yml run
+  fans out do not share the run-scoped artifact name `package-source`.
+  See actions/build-source/UPSTREAM.md.
+inputs:
+  source_artifact:
+    description: Name of the artifact holding the source package
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Prep Linux
+      shell: bash
+      run: |
+        nohup Xvfb :6 -screen 0 1280x1024x24 > /tmp/X.log 2>&1 &
+        echo "DISPLAY=:6" >> $GITHUB_ENV
+        echo "LANG=en_US.UTF-8" >> $GITHUB_ENV
+        echo "UserNM=nm --quiet" >> $GITHUB_ENV
+    - name: Get source package
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        name: ${{ inputs.source_artifact }}
+        path: .
