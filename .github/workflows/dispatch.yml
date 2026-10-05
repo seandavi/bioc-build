@@ -7,14 +7,14 @@ name: dispatch
 # calls happen here either -- ls-remote against each package's own git_url
 # is upstream git, not bioconductor.org.
 #
-# ponytail: the `schedule:` cron (every 6h, mode=changed) is deliberately
-# left out of this PR -- dispatching up to 200 never-attempted packages on a
-# timer before the bioc-registry publisher is deployed would just pile up
-# unconsumed artifacts. Add it back in the M5 PR once M4 (the publisher) is
-# proven. Note for when it returns: GitHub disables a repo's scheduled
-# workflows after 60 days with no *commits* to the repo -- a cron run itself
-# does not count as activity, so `schedule:` alone isn't self-sustaining.
+# The scheduled run is mode=changed, which is curated: it rebuilds only pairs
+# already in attempts.json; new packages enter via mode=backfill/single.
+# GitHub disables `schedule:` after 60 days with no commits (re-enable with
+# `gh workflow enable dispatch.yml -R seandavi/bioc-build`); no keepalive
+# commit, since that would need contents: write.
 on:
+  schedule:
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       mode:

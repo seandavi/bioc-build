@@ -139,5 +139,9 @@ EOF
 out=$(python3 dispatch_matrix.py "$TMP/manifest" changed "" "" RELEASE_3_23 "file://$TMP/attempts_retry.json")
 echo "$out" | grep -q '"stream": "devel"' && check ok ok "dispatch changed: failed<3 at same commit retried"
 
+echo '{}' > "$TMP/attempts_empty.json"
+out=$(python3 dispatch_matrix.py "$TMP/manifest" changed "" "" RELEASE_3_23 "file://$TMP/attempts_empty.json")
+echo "$out" | grep -q 'count=0' && check ok ok "dispatch changed: never-attempted pairs skipped"
+
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL OK"; else echo "$fails FAILED"; exit 1; fi
