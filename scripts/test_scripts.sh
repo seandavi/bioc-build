@@ -77,6 +77,12 @@ diff <(python3 -c "import json;print(json.dumps(json.load(open('$TMP/staged_fail
      <(python3 -c "import json;print(json.dumps(json.load(open('$TMP/staged_fail_jq.json')),sort_keys=True))") \
   && check ok ok "resolve job's jq failure shape matches staged.R's failure shape"
 
+# --- commit_time.R: build-source COMMITINFO -> staged.json commit_time ----
+# Fixture: gzip-compressed {"id":"abc","time":1788091200}, url-safe base64
+# without padding, as buildtools::commit_info_base64 emits.
+check "$(Rscript commit_time.R eJwBHgDh_3siaWQiOiJhYmMiLCJ0aW1lIjoxNzg4MDkxMjAwfYKyCAs)" "2026-08-30T12:00:00Z" "commit_time.R decodes COMMITINFO"
+check "$(Rscript commit_time.R "")" "null" "commit_time.R: empty argument -> null"
+
 # R CMD check's real "Status:" line ("OK" / "1 NOTE" / "2 WARNINGs" / ...)
 # must collapse to a single space-free word (build.yml's "bioc-build: stage"
 # step does this from linux-check's checkstatus output: OK/NOTE/WARNING/ERROR/FAILURE).
