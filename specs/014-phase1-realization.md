@@ -50,20 +50,23 @@ results bioc-registry already archives.
 
 ```
 seandavi/bioc-manifest   packages/<name>.yaml, policy.yaml, validate.yml     (trust root; human PRs)
-seandavi/bioc-build      build.yml (reusable), selftest.yml, dispatch.yml      (untrusted; no secrets)
+seandavi/bioc-build      build-package.yml, build.yml (reusable), dispatch.yml (untrusted; no secrets)
 seandavi/bioc-registry   publish.yml (cron) + POST /publish route              (trusted; secrets)
 ```
 
 Versions: release **3.23** (R 4.6), devel **3.24**. Read them from
-`https://bioconductor.org/config.yaml` (`release_version`, `devel_version`),
-never hardcode.
+bioc-manifest `versions.yaml` (`release_version`, `devel_version`); no step
+depends on bioconductor.org. Never hardcode.
 
 Stream → universe → branch → container:
 
 | stream | universe | git branch | container |
 |---|---|---|---|
-| `release` | `bioc-release` | `RELEASE_3_23` | `bioconductor/bioconductor_docker:RELEASE_3_23` |
-| `devel` | `bioc` | `devel` | `bioconductor/bioconductor_docker:devel` |
+| `release` | `bioc-release` | `RELEASE_3_23` | `ghcr.io/r-universe-org/base-image:release` |
+| `devel` | `bioc` | `devel` | `ghcr.io/r-universe-org/base-image:release` |
+
+Both streams check in the same base image; the source build runs in
+`build-source`. The R version follows policy `r_images` (drift accepted, #32).
 
 ## bioc-manifest
 
@@ -86,8 +89,8 @@ The importer is idempotent and re-runnable; it never edits `state`.
 `policy.yaml`:
 
 ```yaml
-policy_version: "2026.09.1"
-defaults: {max_wall_minutes: 340, vignettes: build}
+policy_version: "2026.09.2"
+defaults: {max_wall_minutes: 340, vignettes: build, source_size_limit_mb: 4096}
 profiles:
   data-experiment:
     check_args: "--no-manual --no-build-vignettes"   # vignettes built by R CMD build already
@@ -101,32 +104,34 @@ profiles:
 `component`/`profile`/`state`/`streams` in their enums, `git_url` exact form.
 Fails the PR otherwise. Nothing else.
 
-## bioc-build: `build.yml`
+## bioc-build: `build-package.yml` and `build.yml`
 
-`on: workflow_call` with inputs `{package, stream, manifest_ref (default main)}`
-plus a thin `workflow_dispatch` wrapper. Permissions exactly
-`id-token: write, contents: read, attestations: write`.
+`build-package.yml` is the entry point: `on: workflow_call` with inputs
+`{package, stream, manifest_ref (default main)}` plus a thin
+`workflow_dispatch` wrapper. Permissions exactly
+`id-token: write, contents: read, attestations: write` (the latter two only
+on the `build` job; the rest run with `contents: read`).
 
-Runs in the stream's container. Steps, each writing one line to
-`events.ndjson` (`{"ts","event","package","stream",...}`):
+Jobs:
 
-1. **resolve** — checkout `seandavi/bioc-manifest@manifest_ref`; read the
-   package's YAML and `policy.yaml`; refuse if `state != active` or the
-   stream is not in `streams`. Record `manifest_commit`.
-2. **fetch** — `git clone --depth 1 --branch <branch> <git_url>`; record
-   `commit`. The repo *contains* the data (verified: ChIPXpressData clones at
-   7.5 GB); `external_data_store.txt` is informational.
-3. **deps** — `BiocManager::install()` of the DESCRIPTION dependencies with
-   the container's binary repos. Record `deps_resolved` (installed.packages
-   of the closure).
-4. **build** — `R CMD build` per profile; sha256 + size.
-5. **check** — `R CMD check <profile.check_args>`; then BiocCheck (advisory).
-   Logs go in `logs/`. Status ∈ {ok, warning, error}. Gate: `error` fails.
-6. **size** — tarball bytes, disk high-water mark, wall minutes.
-7. **attest** — `actions/attest-build-provenance` on the tarball
-   (`subject-path`). Only on success and only when `github.ref == refs/heads/main`.
-8. **stage** — `actions/upload-artifact` named `staged-<package>-<stream>`,
-   `retention-days: 14`, containing:
+1. **resolve** — read the package's YAML, `policy.yaml` and `versions.yaml`
+   from `seandavi/bioc-manifest@manifest_ref`; refuse if `state != active` or
+   the stream is not in `streams`; `git ls-remote` the package's branch for
+   `commit`; derive the policy knobs (`max_wall_minutes`,
+   `source_size_limit_mb`). Record `manifest_commit`.
+2. **build** — calls `build.yml` (r-universe's `source` / `bioconductor` /
+   `linux` jobs, mostly verbatim) with `our_output` set, which gates
+   store-package/deploy off. The `linux` job then attests the tarball
+   (`actions/attest-build-provenance`, `subject-path`) and stages the
+   artifact.
+3. **finalize** — see "Envelope" below.
+
+`events.ndjson` holds one line per terminal outcome: `build_failed` with
+`stage` ∈ {resolve, fetch, build, envelope}, or `check_completed`.
+`staged.json.build.container` is the base-image reference.
+
+The stage step uploads an artifact named `staged-<package>-<stream>`,
+`retention-days: 14`, containing:
 
 ```
 <package>_<version>.tar.gz         (absent on failure)
@@ -169,8 +174,9 @@ therefore yields `failed:envelope`, not `failed:envelope-disk`; measuring the
 disk high-water mark is tracked in #11. The publisher treats `failed:*`
 generically, so it needs no change.
 
-`selftest.yml`: same steps 1–6, `workflow_call`, no attest/stage, uploads
-logs only, usable from a fork.
+A fork runs `build-package.yml` via `workflow_dispatch`; its attestation
+binds to the fork, which the publisher's `--repo seandavi/bioc-build` check
+rejects.
 
 ## bioc-build: `dispatch.yml`
 
@@ -188,14 +194,14 @@ Changed = `git ls-remote <git_url> <branch>` head ≠
 
 ## bioc-registry: `publish.yml` + `POST /publish`
 
-`publish.yml` — cron every 30 min + `workflow_dispatch`. Needs repo secrets
+`publish.yml` — cron :07/:37 + `workflow_dispatch`; GitHub delivers it every
+4–6 h (measured 2026-10-01/02), accepted for phase 1. Needs repo secrets
 `MAINT_KEY`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ACCOUNT_ID`
 (from GSM `cdsci-*`). Skips with a notice, exit 0, if they are unset.
 
 Per completed run on `main` of `seandavi/bioc-build` (newest 100, any
 workflow: a `dispatch.yml` matrix run holds its `build.yml` jobs' artifacts,
-a manual `build.yml` run holds its own; `selftest.yml` never uploads
-`staged-*`), per artifact named `staged-<package>-<stream>` where
+a manual `build.yml` run holds its own), per artifact named `staged-<package>-<stream>` where
 `attempts[package][stream].run_id != run_id`:
 
 1. `gh run download` the artifact; read `staged.json`.
@@ -267,6 +273,9 @@ Nothing in the existing poll → observe → propagate path changes.
 ≥ 20 data-experiment + ≥ 5 workflow packages published to both universes;
 `BiocManager::install(<pkg>, site_repository = "https://bioc-registry.seandavi.workers.dev/repo/bioc-release")`
 installs them; every entry's tarball verifies with `gh attestation verify`.
+
+Install URL is `/repo/<universe>` until bioc-registry#57 splits data/workflow
+packages out of the software index (after the PoC).
 
 ## Deferred (tracked as phase-2 issues)
 
