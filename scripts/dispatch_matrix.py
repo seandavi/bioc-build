@@ -8,9 +8,9 @@ state file (may not exist yet -> treated as {}), decides which
 
 mode=single   -> exactly the given packages/stream, no change-check.
 mode=backfill -> every active (package, stream) from the manifest.
-mode=changed  -> only pairs that are never-attempted, whose remote head
-                 moved since the last attempt, or that failed at the same
-                 commit with attempts < 3 (retry budget).
+mode=changed  -> only pairs already in attempts.json whose remote head
+                 moved, or that failed at the same commit with attempts < 3.
+                 New packages enter only via backfill/single.
 """
 import concurrent.futures
 import json
@@ -88,6 +88,8 @@ elif MODE == "backfill":
     matrix = [{"package": c["package"], "stream": c["stream"]} for c in candidates][:CAP]
 elif MODE == "changed":
     attempts = fetch_json(ATTEMPTS_URL)
+    # Curated: never-attempted pairs are skipped before the ls-remote pool.
+    candidates = [c for c in candidates if attempts.get(c["package"], {}).get(c["stream"])]
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
         heads = dict(zip(
             ((c["package"], c["stream"]) for c in candidates),
@@ -97,9 +99,7 @@ elif MODE == "changed":
     for c in candidates:
         head = heads[(c["package"], c["stream"])]
         prior = attempts.get(c["package"], {}).get(c["stream"])
-        if not prior:
-            dispatch = True
-        elif head != prior.get("commit"):
+        if head != prior.get("commit"):
             dispatch = True
         else:
             status = str(prior.get("status", ""))

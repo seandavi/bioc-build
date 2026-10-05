@@ -182,14 +182,16 @@ rejects.
 
 Cron every 6 h + `workflow_dispatch` with `mode: changed|backfill|single`
 and optional `packages` (comma list) and `stream`. One job computes the
-matrix; a second job `uses: ./.github/workflows/build.yml` with
+matrix; a second job `uses: ./.github/workflows/build-package.yml` with
 `strategy: {matrix: {include: [...]}, max-parallel: 8, fail-fast: false}`.
 
 Changed = `git ls-remote <git_url> <branch>` head ≠
 `attempts[<package>][<stream>].commit` from
 `https://bioc-registry.seandavi.workers.dev/data/state/bioc-build/attempts.json`
-(written by the publisher; shape below). Packages absent from that file are
-"never attempted" and are dispatched. A package with `status` starting
+(written by the publisher; shape below). `changed` is curated: it considers
+only pairs already in that file, so new packages enter only via
+`backfill`/`single`; an unreachable file yields an empty matrix. The scheduled
+run is `cron: "17 */6 * * *"` (`mode` defaults to `changed`). A package with `status` starting
 `failed:` and `attempts >= 3` at the same commit is skipped.
 
 ## bioc-registry: `publish.yml` + `POST /publish`
