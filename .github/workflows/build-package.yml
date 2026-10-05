@@ -177,3 +177,48 @@ jobs:
       our_output: "true"
       package_name: ${{ inputs.package }}
       stream_name: ${{ inputs.stream }}
+
+  finalize:
+    needs: [resolve, build]
+    # A cancelled/timed-out build job uploads nothing (all staging steps are
+    # !cancelled()-guarded); without an artifact the publisher records no
+    # attempt and dispatch.yml re-dispatches the pair forever.
+    if: ${{ always() && needs.resolve.outputs.ok == 'true' && needs.build.result != 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: probe
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          name: staged-${{ inputs.package }}-${{ inputs.stream }}
+          path: probe
+      - if: steps.probe.outcome == 'failure'
+        env:
+          GIT_URL: ${{ needs.resolve.outputs.git_url }}
+          BRANCH: ${{ needs.resolve.outputs.branch }}
+          COMMIT: ${{ needs.resolve.outputs.commit }}
+          MANIFEST_COMMIT: ${{ fromJSON(needs.resolve.outputs.variables).manifest_commit }}
+          POLICY_VERSION: ${{ fromJSON(needs.resolve.outputs.variables).policy_version }}
+        run: |
+          jq -n --arg pkg "${{ inputs.package }}" --arg stream "${{ inputs.stream }}" \
+            --arg run_id "${{ github.run_id }}" --arg run_attempt "${{ github.run_attempt }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg git_url "$GIT_URL" --arg branch "$BRANCH" --arg commit "$COMMIT" \
+            --arg manifest_commit "$MANIFEST_COMMIT" --arg policy_version "$POLICY_VERSION" \
+            '{schema_version:"1",package:$pkg,version:null,stream:$stream,status:"failed:envelope",
+              tarball:{file:null,sha256:null,size_bytes:null},
+              source:{git_url:$git_url,branch:$branch,commit:$commit,commit_time:null},
+              manifest_commit:$manifest_commit,policy_version:$policy_version,
+              build:{run_id:$run_id,run_attempt:($run_attempt|tonumber),run_url:$run_url,container:null,r_version:null},
+              check:{status:null,bioccheck:null},
+              description:{Depends:null,Imports:null,Suggests:null,License:null,NeedsCompilation:null,Priority:null,LinkingTo:null,Enhances:null,OS_type:null},
+              meta:{Title:null,Description:null,URL:null,BugReports:null,Maintainer:null,Author:null,biocViews:null}}' > staged.json
+          echo '{"ts":"'"$(date -u +%FT%TZ)"'","event":"build_failed","package":"${{ inputs.package }}","stream":"${{ inputs.stream }}","stage":"envelope","message":"build job result: ${{ needs.build.result }}"}' > events.ndjson
+      - if: steps.probe.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staged-${{ inputs.package }}-${{ inputs.stream }}
+          path: |
+            staged.json
+            events.ndjson
+          retention-days: 14

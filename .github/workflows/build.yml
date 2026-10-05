@@ -90,7 +90,8 @@ jobs:
   source:
     name: Source pkg and vignettes
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # bioc-build divergence: our_output callers pass policy max_wall_minutes as `timeout`; upstream's fixed cap applies otherwise.
+    timeout-minutes: ${{ inputs.our_output && inputs.timeout || 90 }}
     env: ${{fromJSON(inputs.variables)}}
     outputs:
       commitinfo: ${{ steps.build.outputs.COMMITINFO }}
@@ -201,7 +202,8 @@ jobs:
     needs: [source, bioconductor]
     if: ${{ !cancelled() && needs.source.outputs.sourcepkg }}
     runs-on: ubuntu-24.04${{matrix.arch=='arm64' && '-arm' || ''}}
-    timeout-minutes: 150
+    # bioc-build divergence: our_output callers pass policy max_wall_minutes as `timeout`; upstream's fixed cap applies otherwise.
+    timeout-minutes: ${{ inputs.our_output && inputs.timeout || 150 }}
     name: R-${{ matrix.r }} for Linux ${{ needs.source.outputs.compiled && matrix.arch || '' }}
     strategy:
       fail-fast: false

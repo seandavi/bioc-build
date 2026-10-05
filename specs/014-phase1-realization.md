@@ -157,10 +157,17 @@ logs/00check.log  logs/00install.out  logs/bioccheck.log  logs/build.log
 `staged.json` + logs + events with `status: failed:<stage>` and no tarball
 — that is how the dispatcher learns the attempt happened.
 
-Envelope: job `timeout-minutes: 340`; a disk-free step first (the runner
-has ~14 GB free; the standard "free disk space" removals recover ~25 GB); a
-disk high-water-mark monitor that fails with `failed:envelope-disk` instead
-of letting the runner die.
+Envelope: the `source` and `linux` jobs' `timeout-minutes` come from policy
+`max_wall_minutes` (340 default) when `our_output` is set. The disk-free step
+runs first (the runner has ~14 GB free; the standard "free disk space"
+removals recover ~25 GB). A `finalize` job in `build-package.yml` guarantees
+every attempt leaves a staged artifact: if `build` did not succeed and no
+`staged-<pkg>-<stream>` artifact exists (timeout, cancellation, disk
+exhaustion), it uploads a minimal `staged.json` with `status:
+failed:envelope` and the resolved `source.commit`. Disk exhaustion or timeout
+therefore yields `failed:envelope`, not `failed:envelope-disk`; measuring the
+disk high-water mark is tracked in #11. The publisher treats `failed:*`
+generically, so it needs no change.
 
 `selftest.yml`: same steps 1–6, `workflow_call`, no attest/stage, uploads
 logs only, usable from a fork.
