@@ -11,6 +11,13 @@ includes experiment-data packages well over 100MB (e.g. ChIPXpressData
 clones at 7.5GB), and upstream's cap is not configurable. `build.yml` sets
 `SOURCE_SIZE_LIMIT_MB` from `policy.yaml`'s per-profile size limit.
 
+The cap has a second, independent copy: `r-universe-org/actions/store-package`
+(which `build.yml`'s source job uses to upload the `package-source` artifact)
+fails any file over a hardcoded 100 MB. With `our_output`, `build.yml` writes
+that artifact itself (`pkgdata.txt` + `actions/upload-artifact`, same name and
+file list) so the policy limit is the only cap. First hit by bsseqData
+(run 37378855915).
+
 `action.yml` also points `runs.image` at the local `Dockerfile` instead of
 `docker://ghcr.io/r-universe-org/build-source`, so this action builds at run
 time rather than pulling a published image. That costs a Docker build every

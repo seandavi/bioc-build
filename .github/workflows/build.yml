@@ -130,14 +130,17 @@ jobs:
           subdir: ${{ inputs.subdir }}
           branch: ${{ fromJSON(inputs.variables).branch }}
           articles: ${{ fromJSON(inputs.variables).registered }}
-      # NOT gated by our_output: this uploads the package-source artifact
-      # that linux-prep/windows-prep/macos-prep download in every downstream
-      # job (via actions/download-artifact) -- load-bearing plumbing, not a
-      # "final output" to replace. Only the *later* stores (linux binary,
-      # final check binaries) are ours to gate off.
+      # This uploads the package-source artifact that linux-prep/windows-prep/
+      # macos-prep download in every downstream job (via
+      # actions/download-artifact) -- load-bearing plumbing, not a "final
+      # output" to replace. Only the *later* stores (linux binary, final
+      # check binaries) are ours to gate off.
+      # bioc-build divergence: upstream store-package hardcodes a 100 MB cap
+      # that SOURCE_SIZE_LIMIT_MB (build-source) does not reach, so with
+      # our_output the same artifact is written by the two steps below.
       - name: "Store source package"
         uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
-        if: ${{ !cancelled() && steps.build.outputs.PACKAGE }}
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE && !inputs.our_output }}
         id: artifact
         with:
           name: package-source
@@ -145,6 +148,34 @@ jobs:
           DISTRO: ${{ steps.build.outputs.DISTRO }}
           FILE: ${{ steps.build.outputs.SOURCEPKG }}
           TARGET: ${{ steps.build.outputs.SOURCEPKG && 'source' || 'failure' }}
+      - name: "bioc-build: write pkgdata.txt"
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE && inputs.our_output }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          DISTRO: ${{ steps.build.outputs.DISTRO }}
+          FILE: ${{ steps.build.outputs.SOURCEPKG }}
+          TARGET: ${{ steps.build.outputs.SOURCEPKG && 'source' || 'failure' }}
+        run: |
+          echo "JOB_STATUS='$JOB_STATUS'" > pkgdata.txt
+          echo "DISTRO='$DISTRO'" >> pkgdata.txt
+          echo "FILE='$FILE'" >> pkgdata.txt
+          echo "TARGET='$TARGET'" >> pkgdata.txt
+          echo "CHECKSTATUS=''" >> pkgdata.txt
+          echo "STOREDATE=$(date '+%Y%m%d')" >> pkgdata.txt
+      - name: "bioc-build: save source package"
+        if: ${{ !cancelled() && steps.build.outputs.PACKAGE && inputs.our_output }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-source
+          path: |
+            ${{ steps.build.outputs.SOURCEPKG }}
+            pkgdata.txt
+            build.log
+            *.Rcheck/00install.out
+            *.Rcheck/00check.log
+            *.Rcheck/**/*.fail
+            *.Rcheck/**/*.Rout
+          overwrite: false
       - name: "Store linux binary package"
         uses: r-universe-org/actions/store-package@e859fe2adc2553a5c8b0b2ec6044215d60d3d9c7 # v12
         if: ${{ !cancelled() && steps.build.outputs.BINARYPKG && github.run_attempt == 1 && !inputs.our_output }}
