@@ -81,6 +81,10 @@ steps are r-universe's own `linux-*` actions, running inside
 
 **Reading `attempts.json`.** `https://bioc-registry.seandavi.workers.dev/data/state/bioc-build/attempts.json`, shape `{pkg: {stream: {commit, status, run_id, run_url, ts, attempts}}}`, written by the publisher. A `failed:*` status is retried by the cron up to 3 times at the same commit. `rejected:<rule>` is not retried until the remote head moves. Pairs that were never attempted are never rebuilt by the cron. The publisher sweeps every 4-6 h, so a finished run shows up there with that delay.
 
+**Which packages can be published.** A rebuild at the same version as an `origin: r-universe` entry in `prop/<u>/index.json` is `rejected:version-gate` by design (see SPEC-014 § PoC exit). Check the index before backfilling a package; the ones absent from it are the candidates.
+
+**Many pairs in one run.** `dispatch.yml` fans every pair into one run, so any artifact name shared across pairs collides. Intermediate artifacts are named `package-source-<pkg>-<stream>` and `bioc-checks-<pkg>-<stream>`; keep new ones per pair.
+
 **Rolling back an index entry.**
 
 1. Fetch the prior record from R2 `prop/<u>/log/<ts>-<pkg>_<ver>.json` and drop its `package` and `run_id` keys.

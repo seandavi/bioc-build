@@ -276,6 +276,16 @@ Nothing in the existing poll → observe → propagate path changes.
 `BiocManager::install(<pkg>, site_repository = "https://bioc-registry.seandavi.workers.dev/repo/bioc-release")`
 installs them; every entry's tarball verifies with `gh attestation verify`.
 
+Eligibility: the route's `version-gate` lets bioc-build publish a package only
+if the universe has no entry for it, the entry is a `bioconductor` seed (same
+version allowed once), or the built version is strictly greater. An entry with
+origin `r-universe` at the same version is rejected (`rejected:version-gate`);
+r-universe never re-publishes a version, so such a package waits for a real
+bump. Measured 2026-10-06: of the active manifest packages, only those absent
+from both indexes (22 data-experiment, 10 workflows) can be published at
+once, and they are absent because r-universe's engine fails on many of them.
+Choose PoC packages against `prop/<u>/index.json`, not just the manifest.
+
 Install URL is `/repo/<universe>` until bioc-registry#57 splits data/workflow
 packages out of the software index (after the PoC).
 
