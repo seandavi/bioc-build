@@ -42,3 +42,10 @@ git clone https://github.com/r-universe-org/build-source /tmp/build-source-upstr
 cd /tmp/build-source-upstream && git checkout 1ee4788f93b7a9f2da882e757ceeff34759a7ab5
 diff -ru --exclude=.git --exclude=.github /tmp/build-source-upstream <path-to>/actions/build-source
 ```
+
+`R/buildtools.R` `get_package_datasets()`: the per-dataset `fields` and `rows`
+introspection is wrapped in `tryCatch`. Upstream lets `is.data.frame(x)` fail
+the whole build when a dataset's S4 class lives in a package that is not a
+declared dependency (frmaExampleData's AffyBatch needs affy, mosaicsExample
+needs mosaics, ...), which is why such Bioconductor data packages are absent
+from r-universe. First hit: backfill run 37499642869.
