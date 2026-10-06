@@ -335,6 +335,9 @@ jobs:
         if: ${{ !cancelled() && inputs.our_output }}
         run: |
           set -euo pipefail
+          # staged.R needs jsonlite; the base image does not ship it and it is
+          # only present when the package's dependency closure pulled it in.
+          Rscript -e 'if (!requireNamespace("jsonlite", quietly = TRUE)) install.packages("jsonlite", repos = c(CRAN = "https://cloud.r-project.org"))'
           case "${{ steps.check.outputs.checkstatus }}" in
             FAILURE|ERROR) CHECK_STATUS=error ;;
             WARNING) CHECK_STATUS=warning ;;
