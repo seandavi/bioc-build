@@ -10,7 +10,7 @@ is [bioc-registry](https://github.com/seandavi/bioc-registry)'s job. Which
 packages are authorized, and under which policy, is the manifest's job. The
 map of components and the decisions behind them live in
 [bioc-infrastructure](https://github.com/seandavi/bioc-infrastructure)
-(see [ADR 0010](https://github.com/seandavi/bioc-infrastructure/blob/main/adr/0010-two-new-repos-for-the-build-system-and-the-manifest-name.md)).
+(see [ADR 0010](https://seandavi.github.io/bioc-infrastructure/adr/0010-two-new-repos-for-the-build-system-and-the-manifest-name.html)).
 
 ## Status
 

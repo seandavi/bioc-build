@@ -187,7 +187,7 @@ parallel with, or ahead of, 010 rather than waiting for phase 3.
   per trust domain. Default: separate buckets for `staging` vs everything
   else; revisit if token scoping proves sufficient.
 - ~~OQ-0.2: Naming.~~ Resolved by bioc-infrastructure
-  [ADR 0010](https://github.com/seandavi/bioc-infrastructure/blob/main/adr/0010-two-new-repos-for-the-build-system-and-the-manifest-name.md):
+  [ADR 0010](https://seandavi.github.io/bioc-infrastructure/adr/0010-two-new-repos-for-the-build-system-and-the-manifest-name.html):
   this system is **bioc-build**; the governance list is the **manifest**
   (bioc-manifest), never "the registry" — "registry" means bioc-registry,
   the data plane.
