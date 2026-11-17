@@ -1,0 +1,158 @@
+name: gpu-smoke
+
+# Manual smoke test for the GPU runner (issue #51). Runs one job on an
+# ephemeral GCE L4 VM (see runner/README.md) inside r-universe's base image,
+# and answers the main technical risk: do the packages r-universe's sysreqs
+# resolution installs for RbowtieCuda (including an nvidia-driver-*) shadow
+# the host driver that `--gpus all` injects into the container?
+#
+# Three things can break; each has its own step so a failure names which:
+#   1. the runner/driver/toolkit chain itself    -> "nvidia-smi before sysreqs"
+#   2. installing the sysreqs                    -> "install RbowtieCuda sysreqs"
+#   3. the GPU still working afterwards          -> "nvidia-smi after", "compile", "run"
+#
+# No secrets, no checkout, no third-party actions: everything is a run: step.
+# The dispatcher only starts a VM for this workflow file, on workflow_dispatch,
+# from this repository (runner/dispatcher, EVENT/PATH allowlists).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gpu:
+    runs-on: [self-hosted, gpu-l4]
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/r-universe-org/base-image:release
+      options: --gpus all
+    steps:
+      - name: nvidia-smi before sysreqs
+        id: smi_before
+        run: |
+          nvidia-smi
+          echo "--- driver libraries visible in the container"
+          ldconfig -p | grep -E 'libcuda\.so|libnvidia-ml\.so' || true
+          nvidia-smi --query-gpu=name,driver_version --format=csv,noheader \
+            | tee /tmp/smi-before.csv
+
+      - name: install RbowtieCuda sysreqs
+        id: sysreqs
+        if: ${{ !cancelled() }}
+        # Not allowed to fail the step: whether apt succeeded is data. The
+        # verdict step turns a false `apt_ok` into a failure at the end.
+        shell: bash {0}
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update \
+            && apt-get install -y cmake make nvidia-cuda-dev nvidia-cuda-toolkit \
+                 nvidia-cuda-toolkit-gcc nvidia-driver-590
+          rc=$?
+          echo "apt exit code: $rc"
+          echo "apt_ok=$([ "$rc" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "--- installed nvidia packages"
+          dpkg -l | grep -E '^ii +(nvidia|libnvidia|libcuda)' | awk '{print $2, $3}' || true
+          echo "--- libcuda / libnvidia-ml after install"
+          ldconfig -p | grep -E 'libcuda\.so|libnvidia-ml\.so' || true
+          exit 0
+
+      - name: nvidia-smi after sysreqs
+        id: smi_after
+        if: ${{ !cancelled() }}
+        run: |
+          nvidia-smi
+          nvidia-smi --query-gpu=name,driver_version --format=csv,noheader \
+            | tee /tmp/smi-after.csv
+          if [ -f /tmp/smi-before.csv ] && ! diff /tmp/smi-before.csv /tmp/smi-after.csv; then
+            echo "::warning::nvidia-smi output changed after installing sysreqs"
+          fi
+
+      - name: write CUDA test program
+        if: ${{ !cancelled() }}
+        run: |
+          cat > /tmp/smoke.cu <<'CU'
+          #include <cstdio>
+          #include <cstdlib>
+          #include <cuda_runtime.h>
+
+          __global__ void saxpy(int n, float a, const float *x, float *y) {
+            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i < n) y[i] = a * x[i] + y[i];
+          }
+
+          #define CHECK(call) do { cudaError_t e = (call); if (e != cudaSuccess) { \
+            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, \
+                    cudaGetErrorString(e)); return 1; } } while (0)
+
+          int main() {
+            int driver = 0, runtime = 0, count = 0;
+            CHECK(cudaDriverGetVersion(&driver));
+            CHECK(cudaRuntimeGetVersion(&runtime));
+            CHECK(cudaGetDeviceCount(&count));
+            if (count < 1) { fprintf(stderr, "no CUDA device\n"); return 1; }
+            cudaDeviceProp p;
+            CHECK(cudaGetDeviceProperties(&p, 0));
+            printf("device: %s (sm_%d%d), driver API %d, runtime %d\n",
+                   p.name, p.major, p.minor, driver, runtime);
+
+            const int n = 1 << 20;
+            float *hx = (float *)malloc(n * sizeof(float));
+            float *hy = (float *)malloc(n * sizeof(float));
+            for (int i = 0; i < n; i++) { hx[i] = (float)i; hy[i] = 1.0f; }
+            float *dx, *dy;
+            CHECK(cudaMalloc(&dx, n * sizeof(float)));
+            CHECK(cudaMalloc(&dy, n * sizeof(float)));
+            CHECK(cudaMemcpy(dx, hx, n * sizeof(float), cudaMemcpyHostToDevice));
+            CHECK(cudaMemcpy(dy, hy, n * sizeof(float), cudaMemcpyHostToDevice));
+            saxpy<<<(n + 255) / 256, 256>>>(n, 2.0f, dx, dy);
+            CHECK(cudaGetLastError());
+            CHECK(cudaDeviceSynchronize());
+            CHECK(cudaMemcpy(hy, dy, n * sizeof(float), cudaMemcpyDeviceToHost));
+            for (int i = 0; i < n; i++) {
+              float want = 2.0f * (float)i + 1.0f;
+              if (hy[i] != want) {
+                fprintf(stderr, "mismatch at %d: got %f want %f\n", i, hy[i], want);
+                return 1;
+              }
+            }
+            printf("saxpy on %d elements: OK\n", n);
+            return 0;
+          }
+          CU
+
+      - name: compile CUDA program (nvcc)
+        id: compile
+        if: ${{ !cancelled() }}
+        run: |
+          nvcc --version
+          # sm_89 is the L4 (Ada). Explicit, so compiling does not depend on the driver.
+          nvcc -arch=sm_89 -o /tmp/smoke /tmp/smoke.cu
+
+      - name: run CUDA program on the GPU
+        id: run_cuda
+        if: ${{ !cancelled() }}
+        run: /tmp/smoke
+
+      - name: verdict
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "### GPU smoke test"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| nvidia-smi before sysreqs | ${{ steps.smi_before.outcome }} |"
+            echo "| apt install of RbowtieCuda sysreqs | apt_ok=${{ steps.sysreqs.outputs.apt_ok }} |"
+            echo "| nvidia-smi after sysreqs | ${{ steps.smi_after.outcome }} |"
+            echo "| nvcc compile | ${{ steps.compile.outcome }} |"
+            echo "| CUDA program run | ${{ steps.run_cuda.outcome }} |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.smi_before.outcome }}" != success ] \
+            || [ "${{ steps.sysreqs.outputs.apt_ok }}" != true ] \
+            || [ "${{ steps.smi_after.outcome }}" != success ] \
+            || [ "${{ steps.compile.outcome }}" != success ] \
+            || [ "${{ steps.run_cuda.outcome }}" != success ]; then
+            echo "::error::at least one GPU smoke check failed; see the table above"
+            exit 1
+          fi
