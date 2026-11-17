@@ -1,0 +1,120 @@
+# GPU runner: dispatcher service, VM image, one-time GCP setup.
+# Nothing here runs in CI. Recipes that touch GCP are run by a human with their
+# own credentials; read README.md first.
+
+project        := env_var_or_default("PROJECT", "bioc-u24")
+secrets_project := env_var_or_default("SECRETS_PROJECT", "cdsci-infra")
+region         := env_var_or_default("REGION", "us-central1")
+service        := "gpu-dispatcher"
+dispatcher_sa  := "gpu-dispatcher@" + project + ".iam.gserviceaccount.com"
+runner_sa      := "gh-runner@" + project + ".iam.gserviceaccount.com"
+sweeper_sa     := "gpu-sweeper@" + project + ".iam.gserviceaccount.com"
+# Secret Manager secret names in cdsci-infra (create them first; see README).
+key_secret     := env_var_or_default("APP_KEY_SECRET", "bioc-gpu-runner-app-private-key")
+hook_secret    := env_var_or_default("WEBHOOK_SECRET_NAME", "bioc-gpu-runner-webhook-secret")
+# Numeric id of the GitHub App (not a secret).
+app_id         := env_var_or_default("GITHUB_APP_ID", "")
+
+default:
+    @just --list
+
+# --- local development -------------------------------------------------------
+
+test:
+    cd dispatcher && uv run pytest -q
+
+lint:
+    cd dispatcher && uv run ruff check . && uv run ruff format --check .
+
+fmt:
+    cd dispatcher && uv run ruff format . && uv run ruff check --fix .
+
+# Lint the image scripts (fails if shellcheck is not installed)
+shellcheck:
+    shellcheck image/*.sh
+
+check: lint test
+
+# --- VM image ----------------------------------------------------------------
+
+# Build a new gh-runner-gpu image (creates and deletes a temporary VM)
+image:
+    PROJECT={{project}} ./image/build-image.sh
+
+# --- dispatcher --------------------------------------------------------------
+
+# Notes on the flags below. --no-cpu-throttling (instance-based billing) is
+# required: VM creation continues in a background task after the webhook
+# response. The service is public because GitHub cannot present IAM
+# credentials; /webhook is protected by its HMAC signature and /sweep by
+# in-app OIDC verification.
+# Deploy the dispatcher to Cloud Run (builds from source with Cloud Build)
+deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    test -n "{{app_id}}" || { echo "set GITHUB_APP_ID to the GitHub App's numeric id" >&2; exit 1; }
+    number=$(gcloud projects describe {{project}} --format='value(projectNumber)')
+    gcloud run deploy {{service}} \
+      --project {{project}} --region {{region}} \
+      --source dispatcher \
+      --service-account {{dispatcher_sa}} \
+      --allow-unauthenticated \
+      --no-cpu-throttling \
+      --min-instances 0 --max-instances 3 --concurrency 20 --timeout 300 \
+      --set-env-vars "GITHUB_APP_ID={{app_id}},GCP_PROJECT={{project}},RUNNER_SERVICE_ACCOUNT={{runner_sa}},SWEEP_CALLER_EMAIL={{sweeper_sa}},SWEEP_OIDC_AUDIENCE=https://{{service}}-${number}.{{region}}.run.app" \
+      --set-secrets "GITHUB_APP_PRIVATE_KEY=projects/{{secrets_project}}/secrets/{{key_secret}}:latest,GITHUB_WEBHOOK_SECRET=projects/{{secrets_project}}/secrets/{{hook_secret}}:latest"
+    echo "Webhook URL for the GitHub App:"
+    gcloud run services describe {{service}} --project {{project}} --region {{region}} \
+      --format='value(status.url)'
+
+# Cloud Scheduler job calling POST /sweep every 30 minutes with an OIDC token.
+scheduler:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    number=$(gcloud projects describe {{project}} --format='value(projectNumber)')
+    url="https://{{service}}-${number}.{{region}}.run.app"
+    gcloud scheduler jobs create http {{service}}-sweep \
+      --project {{project}} --location {{region}} \
+      --schedule "*/30 * * * *" \
+      --uri "${url}/sweep" --http-method POST \
+      --oidc-service-account-email {{sweeper_sa}} \
+      --oidc-token-audience "${url}"
+
+# --- one-time GCP setup ------------------------------------------------------
+
+# Service accounts and IAM, run once by a project owner (re-runs report "already exists")
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    p={{project}}
+    gcloud services enable --project "$p" \
+      compute.googleapis.com run.googleapis.com cloudbuild.googleapis.com \
+      artifactregistry.googleapis.com cloudscheduler.googleapis.com
+    gcloud services enable --project {{secrets_project}} secretmanager.googleapis.com
+
+    gcloud iam service-accounts create gpu-dispatcher --project "$p" \
+      --display-name "GPU runner dispatcher (Cloud Run)"
+    gcloud iam service-accounts create gh-runner --project "$p" \
+      --display-name "GPU runner VMs (self-delete only)"
+    gcloud iam service-accounts create gpu-sweeper --project "$p" \
+      --display-name "Cloud Scheduler caller for /sweep"
+
+    # Dispatcher: create/list/delete instances in the project ...
+    gcloud projects add-iam-policy-binding "$p" \
+      --member "serviceAccount:{{dispatcher_sa}}" --role roles/compute.instanceAdmin.v1
+    # ... and act as the runner service account, and only that one.
+    gcloud iam service-accounts add-iam-policy-binding {{runner_sa}} --project "$p" \
+      --member "serviceAccount:{{dispatcher_sa}}" --role roles/iam.serviceAccountUser
+    # ... and read exactly the two secrets (key, webhook secret) in {{secrets_project}}.
+    for s in {{key_secret}} {{hook_secret}}; do
+      gcloud secrets add-iam-policy-binding "$s" --project {{secrets_project}} \
+        --member "serviceAccount:{{dispatcher_sa}}" --role roles/secretmanager.secretAccessor
+    done
+
+    # Runner VMs: may delete instances (themselves) and write logs, nothing else.
+    gcloud iam roles create ghRunnerSelfDelete --project "$p" \
+      --title "GitHub runner VM self-delete" --permissions compute.instances.delete
+    gcloud projects add-iam-policy-binding "$p" \
+      --member "serviceAccount:{{runner_sa}}" --role "projects/$p/roles/ghRunnerSelfDelete"
+    gcloud projects add-iam-policy-binding "$p" \
+      --member "serviceAccount:{{runner_sa}}" --role roles/logging.logWriter
