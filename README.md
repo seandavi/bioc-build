@@ -18,6 +18,8 @@ Phase 1 (see [`specs/014-phase1-realization.md`](specs/014-phase1-realization.md
 `build.yml` (the r-universe engine), `build-package.yml` (our resolve +
 call entry point) and `dispatch.yml` are live. The component specs are in
 [`specs/`](specs/), starting with [`000-overview.md`](specs/000-overview.md).
+The GPU check lane's ephemeral runner (VM image, dispatcher, smoke test) is in
+[`runner/`](runner/README.md).
 
 ## Relationship to r-universe
 
