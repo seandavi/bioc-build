@@ -11,7 +11,12 @@ name: gpu-smoke
 #   2. installing the sysreqs                    -> "install RbowtieCuda sysreqs"
 #   3. the GPU still working afterwards          -> "nvidia-smi after", "compile", "run"
 #
-# No secrets, no checkout, no third-party actions: everything is a run: step.
+# No secrets and no third-party actions beyond checkout.
+#
+# Result of the same test run by hand on 2026-11-17 (bioc-build#51): without
+# scripts/gpu-container-prep.sh the apt install fails, and with a naive fix
+# nvidia-smi reports a driver/library mismatch. With the script all checks
+# pass. This workflow runs with the script, as the real GPU job will.
 # The dispatcher only starts a VM for this workflow file, on workflow_dispatch,
 # from this repository (runner/dispatcher, EVENT/PATH allowlists).
 on:
@@ -36,6 +41,13 @@ jobs:
           ldconfig -p | grep -E 'libcuda\.so|libnvidia-ml\.so' || true
           nvidia-smi --query-gpu=name,driver_version --format=csv,noheader \
             | tee /tmp/smi-before.csv
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !cancelled() }}
+
+      - name: keep the host driver in charge (dpkg path excludes)
+        if: ${{ !cancelled() }}
+        run: ./scripts/gpu-container-prep.sh
 
       - name: install RbowtieCuda sysreqs
         id: sysreqs

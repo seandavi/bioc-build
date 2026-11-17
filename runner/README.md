@@ -122,7 +122,7 @@ Environment variables only.
 | `ALLOWED_EVENTS` | `schedule,workflow_dispatch` | |
 | `ALLOWED_WORKFLOW_PATHS` | the three files above | |
 | `GCP_PROJECT` | `bioc-u24` | |
-| `ZONES` | `us-central1-a,us-central1-b,us-central1-c` | order matters |
+| `ZONES` | 11 zones across us-central1, us-east4, us-east1, us-west1 (see `config.py`) | order matters; the image is global, so any zone with `g2-standard-8` works |
 | `MACHINE_TYPE` | `g2-standard-8` | |
 | `IMAGE_FAMILY` | `gh-runner-gpu` | |
 | `DISK_SIZE_GB` | `200` | |
@@ -193,3 +193,26 @@ just shellcheck   # image scripts (needs shellcheck)
 - The VM boot and driver install (`image/`) have not been exercised on real
   hardware yet; the three scripts were only syntax-checked (`bash -n`) and
   run through shellcheck (via its Docker image), which is clean.
+
+## What has been run (2026-11-17)
+
+Run by hand in `bioc-u24`, without the dispatcher or a GitHub job:
+
+| Step | Result |
+| --- | --- |
+| `image/build-image.sh` | Worked first time; image `gh-runner-gpu-20261117-193016`. |
+| Boot a `g2-standard-8` from the image | Host `nvidia-smi` sees the L4, driver 580.178.04. `runner-boot.service` does nothing without `jit-config`. |
+| `docker run --gpus all` with `base-image:release` | `nvidia-smi` works in the container. Image pull took 2 min 53 s. |
+| apt install of RbowtieCuda's sysreqs, no prep | Fails, apt exit 100: `libnvidia-compute-595`, `nvidia-utils-595` and `nvidia-compute-utils-595` cannot unpack over the mounted host files. Happens with the CUDA toolkit alone, too, so dropping the driver from the sysreqs would not fix it. |
+| Same, excluding only the exact mounted paths | apt succeeds, then `nvidia-smi` fails with "Driver/library version mismatch": the 595 libraries land beside the host's 580 ones. |
+| Same, after `scripts/gpu-container-prep.sh` | apt succeeds, `nvidia-smi` works, a CUDA program compiled with the distro's nvcc 12.4 (GCC 15.2) runs correctly on the L4. |
+
+Capacity on that day: of 5 Spot VMs, 2 were preempted within 12 minutes, and
+for about 20 minutes no zone in four US regions had an L4 at all, Spot or
+on-demand. Expect queued jobs to wait; the dispatcher's zone list is long for
+that reason, and a job preempted mid-run is still not re-dispatched (see the
+known gaps above).
+
+Not yet run: the dispatcher against real GitHub and Compute APIs, a JIT runner
+taking a job, the self-delete, `just setup` / `deploy` / `scheduler`, and
+`gpu-smoke.yml`.

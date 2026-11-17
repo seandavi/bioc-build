@@ -30,7 +30,19 @@ class Settings:
 
     # GCE.
     gcp_project: str = "bioc-u24"
-    zones: tuple[str, ...] = ("us-central1-a", "us-central1-b", "us-central1-c")
+    zones: tuple[str, ...] = (
+        "us-central1-a",
+        "us-central1-b",
+        "us-central1-c",
+        "us-east4-a",
+        "us-east4-c",
+        "us-east1-b",
+        "us-east1-c",
+        "us-east1-d",
+        "us-west1-a",
+        "us-west1-b",
+        "us-west1-c",
+    )
     machine_type: str = "g2-standard-8"
     image_family: str = "gh-runner-gpu"
     disk_size_gb: int = 200

@@ -16,7 +16,8 @@ def test_defaults():
     assert s.gpu_label == "gpu-l4"
     assert s.allowed_events == ("schedule", "workflow_dispatch")
     assert ".github/workflows/gpu-smoke.yml" in s.allowed_workflow_paths
-    assert s.zones == ("us-central1-a", "us-central1-b", "us-central1-c")
+    assert s.zones[:3] == ("us-central1-a", "us-central1-b", "us-central1-c")
+    assert {z.rsplit("-", 1)[0] for z in s.zones} == {"us-central1", "us-east4", "us-east1", "us-west1"}
     assert s.max_run_duration_seconds == 6 * 3600
     assert s.gcp_project == "bioc-u24"
 

@@ -24,6 +24,8 @@ def settings(private_key_pem: str) -> Settings:
         runner_service_account="gh-runner@bioc-u24.iam.gserviceaccount.com",
         sweep_oidc_audience="https://dispatcher.example",
         sweep_caller_email="scheduler@bioc-u24.iam.gserviceaccount.com",
+        # Three zones keep the fallback tests readable; the default list is longer.
+        zones=("us-central1-a", "us-central1-b", "us-central1-c"),
     )
 
 
